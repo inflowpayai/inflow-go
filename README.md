@@ -93,11 +93,101 @@ artifact without copying credential contents into the message. The MPP package c
 upstream protocol-primitives package and the Go standard library; it does not import the upstream
 server, blockchain clients, or Redis integration.
 
+### Managed buyer credentials
+
+Use `mpp/buyer` to obtain a credential for a seller's challenge. The client supports InFlow
+charge and subscription challenges and Tempo charge challenges. `Fulfil` and `Prepare` send
+payment requests to InFlow; they do not sign locally or send the credential to the seller's resource.
+
+```go
+client, err := buyer.New(buyer.Options{
+    Options: inflow.Options{
+        Environment: inflow.Sandbox,
+        APIKey: os.Getenv("INFLOW_API_KEY"),
+    },
+})
+if err != nil {
+    return err
+}
+credential, err := client.Fulfil(ctx, challenge, buyer.PaymentOptions{})
+```
+
+Import `github.com/inflowpayai/inflow-go/mpp/buyer` alongside the root `inflow` package.
+The challenge comes from `mpp.ParseChallenges`. Keep its encoded request and opaque fields intact.
+For an InFlow instrument charge, supply `PaymentOptions.InstrumentID`. For access under an existing
+InFlow subscription, supply `PaymentOptions.SubscriptionID`; that calls subscription authorization
+instead of creating another purchase. Tempo requires no per-call selector.
+
+For a separate creation and waiting step, call `Prepare`, then `payment.Wait(ctx)` or
+`payment.Cancel(ctx)`. `TransactionID()` and `ApprovalID()` expose the initial response identifiers.
+Concurrent waits share one polling sequence and result; each successful wait receives its own
+decoded credential. Cancelling a wait abandons that payment for every waiter, not other payments
+using the same client. A completed result remains available on the handle.
+
+`PollInterval` defaults to five seconds; the server's `retryAfterSeconds` takes precedence, including
+zero. `WaitTimeout` defaults to fifteen minutes after creation returns. It includes time before
+`Wait` and time spent making polling requests. The context passed to `Prepare` owns the operation;
+keep it alive until waiting or cancellation finishes.
+
+When an unfinished payment fails or is cancelled, the SDK attempts cancellation of its known
+approval and waits up to five seconds for that attempt. This cleanup uses a separate context so an
+already-cancelled payment context does not prevent it. Cleanup failure never replaces the payment
+error. Explicit `Cancel` returns the cleanup error, or its own caller context error if that caller
+stops waiting. No approval can be cancelled when creation ends without receiving its identifier.
+Cancelling subscription authorization does not cancel the subscription, and cancelling a completed
+payment does not reverse it.
+
+Use `errors.As` with `*buyer.Error` for payment failures. Its `Code` distinguishes cancellation,
+pending timeout, platform rejection, expiry, malformed responses or credentials, and unsupported
+methods. `Problem` retains the platform's problem JSON. Cancellation and timeout support
+`errors.Is` with the corresponding context error. HTTP failures retain `*inflow.APIError`.
+Creation, authorization, polling, and cleanup requests make one attempt each; the SDK does not
+replay a payment workflow after an uncertain network outcome.
+
+### Payment-aware HTTP requests
+
+`client.Do(request, paymentOptions)` sends a resource request, handles a `402` by fulfilling the
+first supported MPP challenge in the server's order, and sends one paid retry. Use `Fulfil` or
+`Prepare` when your application needs to choose a particular challenge itself. Close the returned
+response body, just as with `http.Client.Do`. InFlow API authentication is not sent to the resource.
+
+```go
+request, err := http.NewRequestWithContext(ctx, http.MethodGet, resourceURL, nil)
+if err != nil {
+    return err
+}
+request.Header.Set("X-AEP-API-Key", serviceAPIKey)
+response, err := client.Do(request, buyer.PaymentOptions{})
+if err != nil {
+    return err
+}
+defer response.Body.Close()
+```
+
+MPP sends its credential in `Authorization: Payment ...`. If a `402` request already has a
+nonempty `Authorization` header, or URL credentials that produce Basic authentication, `Do`
+returns `ErrAuthorizationConflict` before obtaining a payment credential. Separate API-key and
+cookie headers are preserved. Ordinary non-402 responses, including authenticated ones, pass
+through without a payment attempt. The SDK does not move application credentials to another header.
+
+A request with a body must supply a working `GetBody` before payment starts. `http.NewRequest`
+provides it for `strings.Reader`, `bytes.Reader`, and `bytes.Buffer` inputs. The SDK does not buffer
+an arbitrary streaming body. It closes an intermediate `402` body without draining it and does
+not modify the caller's headers or `GetBody`. The resource transport is `Options.Transport`;
+`Options.Timeout` applies to each resource exchange, including response-body reading.
+
+Neither the initial nor the paid request follows redirects. A paid response of `401`, `402`,
+or another failure status is returned as-is; it does not initiate another payment. A network
+failure after submitting a credential can leave the payment outcome unknown. The SDK does not
+retry that request or attempt to reverse payment. Inspect the result before retrying in your
+application. `Payment-Receipt`, when supplied by the seller, remains on the response for decoding
+with `mpp.DecodeReceipt`.
+
 ### Upstream compatibility notes
 
 These observations apply to `mpp-go v0.2.0` ([source revision](https://github.com/tempoxyz/mpp-go/tree/41c35ed9e9332b9d224c1fc4af606efa98a24251)). They distinguish the library's general-purpose behavior from the requirements of the [InFlow MPP integration](https://github.com/inflowpayai/inflow-specs/blob/main/contracts/mpp.md). Recheck them when upgrading the dependency.
 
-1. **Preserving application authentication.** The upstream buyer transport puts the payment credential in `Authorization`, replacing an existing value. An authenticated resource may already use that header for its application session. InFlow's HTTP integration must preserve application authentication and use the appropriate payment header instead of delegating this retry unchanged. [Source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/client/transport.go#L99-L106).
+1. **Preserving application authentication.** The upstream buyer transport puts the payment credential in `Authorization`, replacing an existing value. An authenticated resource may already use that header for its application session. InFlow's HTTP integration rejects that conflict before payment and preserves separate cookie/API-key authentication. It does not invent an alternate payment header. [Source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/client/transport.go#L99-L106).
 
 2. **Checking request replay before payment.** The upstream transport creates a payment credential before checking whether the request body can be replayed. For a body without `GetBody`, this can invoke the payment method and then fail locally without sending the paid request. InFlow must establish replayability before invoking a payment method. [Source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/client/transport.go#L92-L125).
 
