@@ -5,6 +5,7 @@ consumer-smoke:
 
 docs:
 	go doc .
+	go doc ./mpp
 
 format:
 	gofmt -w .
@@ -14,6 +15,7 @@ format-check:
 
 test:
 	go test -race -coverprofile=coverage.out ./...
+	awk -f scripts/check-coverage.awk coverage.out
 
 tidy-check:
 	go mod tidy -diff

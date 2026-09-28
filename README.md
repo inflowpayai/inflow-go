@@ -8,8 +8,9 @@ Requires Go 1.26 or later and Make. Run `make verify` for formatting, module tid
 static analysis, race-enabled tests, package documentation, and a build from a separate consumer
 module. `make format` formats Go source files.
 
-CI runs on Go 1.26 and 1.27. Codecov evaluates an 85% project target with a 1% tolerance and a
-90% changed-line target without tolerance.
+CI runs on Go 1.26 and 1.27. Local tests require at least 99% statement coverage in every source
+file. Codecov evaluates 99% project and changed-line targets without tolerance. Its line-based
+measurements differ from Go's statement coverage; aim for 100% on both.
 
 The consumer check builds and runs a separate Go module against the local checkout. It checks
 configuration and error types independently of payment behavior.
@@ -50,6 +51,48 @@ work, but does not itself cancel a server-side approval or reverse a payment.
 
 The integration uses `github.com/tempoxyz/mpp-go` protocol primitives, with InFlow-owned HTTP handling and payment lifecycle orchestration. It does not fork the upstream library.
 
+### Payment data and codecs
+
+Import `github.com/inflowpayai/inflow-go/mpp` to read payment challenges, credentials, and receipts.
+For a protected resource's response, pass `response.Header.Values("WWW-Authenticate")` to
+`mpp.ParseChallenges`. It accepts repeated and combined headers, preserves challenge order, and
+ignores unrelated authentication schemes such as Bearer. A malformed Payment challenge returns
+`*mpp.CodecError`; it is not silently removed from the result.
+
+`Challenge.Request` and `Challenge.Opaque` retain the issuer's encoded strings. Keep those values
+unchanged when echoing a challenge in a credential: decoding and re-encoding them can change the
+seller's challenge binding. Optional challenge fields use pointers so omission and an explicitly
+empty value remain distinct.
+
+```go
+request := mpp.ChargeRequest{
+    Amount: "10.5",
+    Currency: "USDC",
+    MethodDetails: &mpp.InflowMethodDetails{Rail: "balance"},
+}
+if err := request.Validate(); err != nil {
+    return err
+}
+encodedRequest, err := mpp.Encode(request)
+```
+
+`ChargeRequest`, `SubscriptionRequest`, `TempoRequest`, and `TempoPayload` provide native shape
+validation. This does not establish that an account supports a currency or rail, or that a proof
+is valid. Amounts are strings: InFlow amounts use decimal units; Tempo amounts use integer base
+units. Request encoding sorts keys and omits null object members, matching InFlow's request
+encoding. Use strings for exact monetary values; general numeric inputs use binary64 semantics.
+
+`DecodeCredential` and `EncodeCredential` preserve payload values, including nulls and large
+integers decoded as `json.Number`. `DecodeReceipt` and `EncodeReceipt` preserve InFlow settlement
+fields and arbitrary top-level method extensions in `Receipt.Extensions`. Extensions cannot
+overwrite the receipt's named fields. These functions take or return the base64url value alone,
+without a `Payment ` prefix. Decoding checks structure, not payment validity or settlement.
+
+Codecs accept at most 64 KiB of encoded data per value or header. Errors identify the invalid
+artifact without copying credential contents into the message. The MPP package compiles only the
+upstream protocol-primitives package and the Go standard library; it does not import the upstream
+server, blockchain clients, or Redis integration.
+
 ### Upstream compatibility notes
 
 These observations apply to `mpp-go v0.2.0` ([source revision](https://github.com/tempoxyz/mpp-go/tree/41c35ed9e9332b9d224c1fc4af606efa98a24251)). They distinguish the library's general-purpose behavior from the requirements of the [InFlow MPP integration](https://github.com/inflowpayai/inflow-specs/blob/main/contracts/mpp.md). Recheck them when upgrading the dependency.
@@ -67,3 +110,5 @@ These observations apply to `mpp-go v0.2.0` ([source revision](https://github.co
 6. **Server dependency coupling.** The upstream server package imports its Tempo package, which brings Ethereum, Tempo, and Redis packages into the compilation dependencies. InFlow delegates payment processing to its platform and does not need that entire server implementation for this purpose. Using the protocol primitives avoids this coupling. The upstream module's web-framework requirements do not mean every framework is compiled into every consumer. This distinction was checked with `go list -deps`. [Server imports](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/server/server.go#L9-L15), [Tempo Redis dependency](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/tempo/redis_store.go#L3-L8).
 
 7. **MPP over MCP is not supported.** The released Go library has no MCP integration package corresponding to the `mppx/mcp/client` integration used by InFlow Node. InFlow Go does not implement an independent MPP-over-MCP transport. Support depends on an upstream implementation so that integrators do not adopt an InFlow-specific design that could conflict with the upstream protocol integration. This limitation concerns MPP, not x402's separate MCP integration. [Released package tree](https://github.com/tempoxyz/mpp-go/tree/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg).
+
+8. **Preserving opaque challenge data.** The upstream challenge parser decodes `opaque` into a string map, and its formatter encodes that map again. An issuer's original encoded value can therefore change. InFlow keeps that field as its original string and uses its own wire types, while reusing compatible upstream header primitives. [Parser and formatter](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/mpp/parse.go#L213-L298).
