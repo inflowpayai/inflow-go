@@ -12,4 +12,4 @@ go mod init example.com/inflow-consumer
 go mod edit -require github.com/inflowpayai/inflow-go@v0.0.0
 go mod edit -replace "github.com/inflowpayai/inflow-go=$repository"
 go mod tidy
-go build -o /dev/null .
+go run .
