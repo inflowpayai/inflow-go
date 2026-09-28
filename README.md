@@ -11,8 +11,8 @@ module. `make format` formats Go source files.
 CI runs on Go 1.26 and 1.27. Codecov evaluates an 85% project target with a 1% tolerance and a
 90% changed-line target without tolerance.
 
-The consumer check builds a separate Go module against the local checkout. It checks module
-consumption independently of payment behavior.
+The consumer check builds and runs a separate Go module against the local checkout. It checks
+configuration and error types independently of payment behavior.
 
 ## Package design
 
@@ -21,6 +21,30 @@ packages, with shared internal HTTP implementation. The client accepts an option
 `http.RoundTripper`; InFlow controls HTTP redirect and timeout policies. Construction performs no
 network activity. Operations load configuration when needed and permit a later attempt after a
 failed load.
+
+### Shared configuration and errors
+
+The protocol clients accept `inflow.Options`. Set `Environment: inflow.Sandbox` for testing;
+the default is production. `BaseURL` overrides the environment address for a private deployment
+or local testing. Configure either `APIKey` or an `AccessToken` callback, not both. Omit both for
+anonymous requests to endpoints that permit them. The callback receives the request context,
+runs for each attempt, and must support concurrent calls and cancellation. Its errors return
+unchanged to the caller.
+
+`Timeout` defaults to 30 seconds per attempt, including token retrieval and response-body reading.
+An earlier deadline on the operation's context takes precedence. Custom transports must honor
+that context and must not follow redirects; the SDK does not forward requests to redirect targets.
+API request and response bodies are limited to 8 MiB.
+
+Use `errors.As` to inspect `*inflow.APIError` for the server's error code, message, HTTP status,
+request identifier, and diagnostic response. Credential headers and recognized credential fields
+are redacted from error diagnostics. Transport failures have HTTP status zero; cancellation and
+deadlines support `errors.Is`. Error diagnostics can still contain application data and are not
+a substitute for an application's logging policy.
+
+HTTP request methods are internal. Protocol operations choose their retry policy explicitly;
+the shared transport performs no retries by default. Cancelling a request context stops local
+work, but does not itself cancel a server-side approval or reverse a payment.
 
 ## MPP integration design
 
