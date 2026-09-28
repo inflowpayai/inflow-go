@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        go:
+          - 1.26.x
+          - 1.27.x
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+
+      - run: make verify
+
+      - name: Inspect coverage profile
+        id: coverage
+        shell: bash
+        run: |
+          if awk 'NR > 1 && $2 > 0 { found = 1 } END { exit !found }' coverage.out; then
+            echo "executable=true" >> "$GITHUB_OUTPUT"
+            go tool cover -func=coverage.out
+          else
+            echo "executable=false" >> "$GITHUB_OUTPUT"
+            echo "The module has no executable SDK statements; coverage is not applicable."
+          fi
+
+      - name: Upload coverage to Codecov
+        if: matrix.go == '1.26.x' && steps.coverage.outputs.executable == 'true'
+        uses: codecov/codecov-action@v7
+        with:
+          fail_ci_if_error: true
+          files: ./coverage.out
+          flags: unit
+          name: go-1.26-unit
+          use_oidc: true
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v7
+        with:
+          name: inflow-go-coverage-go-${{ matrix.go }}
+          path: coverage.out
+          if-no-files-found: error
+          retention-days: 7
