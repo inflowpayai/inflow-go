@@ -251,6 +251,139 @@ operation hash. It never broadcasts. The signer must support concurrent calls an
 cancellation. `SignMessage` applies Ethereum's personal-message prefix to the operation hash;
 it must not sign the hash as a raw transaction digest.
 
+### x402 Seller
+
+Use `x402/seller` with the upstream x402 `net/http` middleware. InFlow supplies Seller
+configuration, priced payment offers, scheme registrations and a facilitator client. The
+upstream middleware checks payment, runs your handler and settles a successful response.
+You do not need to implement or host a facilitator.
+
+Create an InFlow **Seller** account in [Sandbox](https://sandbox.inflowpay.ai) or
+[Production](https://app.inflowpay.ai), then create an API key in that dashboard. Set the
+matching `Environment`. A Developer account cannot load Seller configuration.
+
+```go
+import (
+    "context"
+    "errors"
+    "net/http"
+    "os"
+
+    inflow "github.com/inflowpayai/inflow-go"
+    "github.com/inflowpayai/inflow-go/x402/seller"
+    foundation "github.com/x402-foundation/x402/go/v2"
+    xhttp "github.com/x402-foundation/x402/go/v2/http"
+    "github.com/x402-foundation/x402/go/v2/http/nethttp"
+)
+
+func paidHandler(ctx context.Context, handler http.Handler) (http.Handler, error) {
+    options := inflow.Options{Environment: inflow.Sandbox, APIKey: os.Getenv("INFLOW_API_KEY")}
+    client, err := seller.New(options)
+    if err != nil { return nil, err }
+    facilitator, err := seller.NewFacilitator(options)
+    if err != nil { return nil, err }
+    route, err := client.Route(ctx, seller.RouteOptions{
+        AcceptsOptions: seller.AcceptsOptions{Price: seller.PriceSpec{Amount: "$0.01"}},
+    })
+    if err != nil { return nil, err }
+    if len(route.Accepts) == 0 { return nil, errors.New("no payment offers match this route") }
+    registrations, err := client.SchemeRegistrations(ctx, seller.RegistrationOptions{})
+    if err != nil { return nil, err }
+    server := xhttp.Newx402HTTPResourceServer(
+        xhttp.RoutesConfig{"GET /api/data": route},
+        foundation.WithFacilitatorClient(facilitator),
+    )
+    for _, registration := range registrations {
+        server.Register(registration.Network, registration.Server)
+    }
+    if err := server.Initialize(ctx); err != nil { return nil, err }
+    return nethttp.PaymentMiddlewareFromHTTPServer(
+        server, nethttp.WithSyncFacilitatorOnStart(false),
+    )(handler), nil
+}
+```
+
+This protects `GET /api/data`; unmatched routes still reach your handler without payment.
+Initialize before starting your HTTP server. The explicit initialization returns configuration
+errors to your application instead of delegating startup error handling to the middleware.
+Supply a startup context with a deadline. The middleware buffers handler responses and is not a
+streaming adapter. It does not settle ordinary authorization payments after a handler error or
+panic, and it withholds successful content if settlement fails. It cannot undo work your handler
+already performed, so make side effects idempotent using the payment identifier where appropriate.
+
+`New` performs no requests. `Config` loads configuration on demand and caches it for one hour;
+`RefreshConfig` forces a refresh. `SignerAddresses` uses the supported-capabilities cache and
+matches an exact network before its namespace wildcard. `RefreshSupported` refreshes that cache.
+Concurrent loads share a request; cancelling a joining caller stops only its wait. Cancelling
+the caller that started the request fails that shared load, and another call can try again.
+Returned configuration is independent of the cache. Refreshing configuration does not rebuild
+an existing middleware instance: rebuild its offers and registrations when adopting changes.
+
+`Accepts` constructs payment offers without sponsorship declarations. `Route` also checks
+sponsorship eligibility. `PriceSpec.Amount` accepts `$0.01`, `0.01 USDC`, or `0.01` with an
+explicit `Currency`. `Currency` overrides a currency in the amount string. `USD` selects all
+configured stablecoins. Amounts allow at most eight decimal places; conversion to atomic units
+rejects nonzero precision loss. `Schemes` and `Networks` filters intersect; nil means unrestricted,
+while an empty slice selects nothing. The default payment lifetime is 300 seconds.
+
+#### Metered payments
+
+Metered `upto` payments require explicit selection. Import the upstream implementation only in
+applications that need it; fixed-price sellers do not compile Ethereum packages through InFlow's
+seller package. This is a Go setup difference from Node's dynamically loaded optional EVM package.
+
+```go
+import upto "github.com/x402-foundation/x402/go/v2/mechanisms/evm/upto/server"
+
+offers, err := client.Accepts(ctx, seller.AcceptsOptions{
+    Price: seller.PriceSpec{Amount: "0.10 USDC"},
+    Schemes: []string{"upto"},
+})
+if err != nil { return err }
+registrations, err := client.SchemeRegistrations(ctx, seller.RegistrationOptions{
+    Schemes: []string{"upto"},
+    MeteredScheme: upto.NewUptoEvmScheme(),
+})
+if err != nil { return err }
+```
+
+Use `offers` as the route's `Accepts`, and register the returned schemes as in the full example.
+Check for no offers before starting. Configuration must advertise the asset's Permit2 capability
+and the network's metered proxy and facilitator address. Selecting an available metered scheme
+without supplying `MeteredScheme` returns an error rather than silently skipping its registration.
+
+The advertised price is the buyer's authorized maximum. In your handler, call
+`nethttp.SetSettlementOverrides(w, &foundation.SettlementOverrides{Amount: "123"})` before writing
+the response to charge 123 atomic units of the selected asset. Choose an integer amount between
+zero and the authorized maximum; without an override, settlement uses that maximum. This path
+uses an external blockchain wallet, not InFlow-managed Permit2 signing.
+
+#### Sponsorship and facilitator access
+
+Set `RouteOptions.AssetTransferMethod` to `"permit2"` to select compatible Permit2 offers.
+Balance offers remain available unless filtered out. `Route` declares EIP-2612 sponsorship only
+when every Permit2 offer supplies the required token metadata and the refreshed facilitator
+capabilities agree. Otherwise it checks explicit InFlow EIP-7702 sponsorship support. Missing
+capability information never implies support. Use separate routes for incompatible tokens.
+For multiple facilitators, put InFlow first for routes whose sponsorship it advertises; the
+upstream middleware selects the first facilitator claiming a scheme/network pair.
+
+`NewFacilitator` requires an API key and implements upstream `FacilitatorClient` directly.
+`NewAnonymousFacilitator` explicitly sends no credentials, even if options contain them. Anonymous
+facilitation does not load Seller configuration and cannot settle InFlow balance payments.
+`Verify` and `Settle` accept the upstream interface's JSON byte slices. Verification does not
+settle. False verification or settlement results remain false results; unrelated HTTP failures
+remain `inflow.APIError`. Only the recognized Permit2 allowance response is normalized from
+HTTP 412 into a verification result.
+
+The facilitator preserves a valid payment identifier or derives one from the transaction ID,
+serialized transaction or signature. If none exists, it hashes the compact JSON payment data;
+retain the same payload bytes for verification and settlement in that fallback case. Requests
+preserve unknown payload fields and extensions. Only HTTP 409 `idempotency_pending` retries:
+five total attempts, reusing the same request, with a cancellable delay of up to five seconds.
+Other failures do not trigger automatic payment retries. Cancellation stops waiting; it does
+not prove that an already submitted payment was reversed.
+
 ### Shared configuration and errors
 
 The protocol clients accept `inflow.Options`. Set `Environment: inflow.Sandbox` for testing;

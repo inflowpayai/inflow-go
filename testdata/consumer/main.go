@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"os"
 
 	inflow "github.com/inflowpayai/inflow-go"
 	"github.com/inflowpayai/inflow-go/mpp"
@@ -11,7 +12,10 @@ import (
 	"github.com/inflowpayai/inflow-go/mpp/seller"
 	"github.com/inflowpayai/inflow-go/x402"
 	x402buyer "github.com/inflowpayai/inflow-go/x402/buyer"
+	x402seller "github.com/inflowpayai/inflow-go/x402/seller"
 	foundation "github.com/x402-foundation/x402/go/v2"
+	xhttp "github.com/x402-foundation/x402/go/v2/http"
+	"github.com/x402-foundation/x402/go/v2/http/nethttp"
 )
 
 func main() {
@@ -74,4 +78,57 @@ func main() {
 	if err := sellerClient.Load(ctx); !errors.Is(err, context.Canceled) {
 		panic("seller cancellation contract failed")
 	}
+	x402Seller, err := x402seller.New(inflow.Options{Environment: inflow.Sandbox, APIKey: "consumer-test"})
+	if err != nil {
+		panic(err)
+	}
+	if _, err := x402Seller.SchemeRegistrations(ctx, x402seller.RegistrationOptions{}); !errors.Is(err, context.Canceled) {
+		panic("x402 seller cancellation contract failed")
+	}
+	facilitator, err := x402seller.NewAnonymousFacilitator(inflow.Options{Environment: inflow.Sandbox})
+	if err != nil {
+		panic(err)
+	}
+	var upstreamFacilitator foundation.FacilitatorClient = facilitator
+	if _, err := upstreamFacilitator.GetSupported(ctx); !errors.Is(err, context.Canceled) {
+		panic("x402 facilitator cancellation contract failed")
+	}
+}
+
+func paidHandler(ctx context.Context, handler http.Handler) (http.Handler, error) {
+	options := inflow.Options{Environment: inflow.Sandbox, APIKey: os.Getenv("INFLOW_API_KEY")}
+	client, err := x402seller.New(options)
+	if err != nil {
+		return nil, err
+	}
+	facilitator, err := x402seller.NewFacilitator(options)
+	if err != nil {
+		return nil, err
+	}
+	route, err := client.Route(ctx, x402seller.RouteOptions{
+		AcceptsOptions: x402seller.AcceptsOptions{Price: x402seller.PriceSpec{Amount: "$0.01"}},
+	})
+	if err != nil {
+		return nil, err
+	}
+	if len(route.Accepts) == 0 {
+		return nil, errors.New("no payment offers match this route")
+	}
+	registrations, err := client.SchemeRegistrations(ctx, x402seller.RegistrationOptions{})
+	if err != nil {
+		return nil, err
+	}
+	server := xhttp.Newx402HTTPResourceServer(
+		xhttp.RoutesConfig{"GET /api/data": route},
+		foundation.WithFacilitatorClient(facilitator),
+	)
+	for _, registration := range registrations {
+		server.Register(registration.Network, registration.Server)
+	}
+	if err := server.Initialize(ctx); err != nil {
+		return nil, err
+	}
+	return nethttp.PaymentMiddlewareFromHTTPServer(
+		server, nethttp.WithSyncFacilitatorOnStart(false),
+	)(handler), nil
 }
