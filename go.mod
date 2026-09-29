@@ -4,6 +4,7 @@ go 1.26.0
 
 require (
 	github.com/ethereum/go-ethereum v1.17.3
+	github.com/felixge/httpsnoop v1.0.4
 	github.com/holiman/uint256 v1.3.2
 	github.com/tempoxyz/mpp-go v0.2.0
 	github.com/x402-foundation/x402/go/v2 v2.27.0

@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"reflect"
 	"strings"
 	"time"
 
+	"github.com/felixge/httpsnoop"
 	"github.com/inflowpayai/inflow-go/mpp"
 )
 
@@ -27,6 +29,7 @@ type Route struct {
 
 // Protect validates and broadcasts payment before running next. It does not
 // buffer the handler response or undo payment when the handler fails.
+// Paid responses carry an unqualified private Cache-Control directive.
 func (c *Client) Protect(route Route, next http.Handler) (http.Handler, error) {
 	if route.Realm == "" || route.SecretKey == "" || len(route.Offers) == 0 || route.Lifetime < 0 || next == nil {
 		return nil, errors.New("MPP route requires realm, secret key, offers, handler, and non-negative lifetime")
@@ -68,7 +71,7 @@ func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next
 			}
 			encoded, _ := mpp.EncodeReceipt(receipt)
 			w.Header().Set("Payment-Receipt", encoded)
-			next.ServeHTTP(w, r)
+			servePrivate(w, r, next)
 			return
 		}
 	}
@@ -107,6 +110,64 @@ func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	http.Error(w, "Payment required", http.StatusPaymentRequired)
+}
+
+func servePrivate(w http.ResponseWriter, r *http.Request, next http.Handler) {
+	// Apply after the handler chooses its headers, but before any operation can
+	// send them. Preserve streaming and the underlying writer's optional interfaces.
+	apply := func() {
+		value := strings.Join(w.Header().Values("Cache-Control"), ", ")
+		if privateCacheControl(value) {
+			return
+		}
+		if value == "" {
+			w.Header().Set("Cache-Control", "private")
+		} else {
+			w.Header().Set("Cache-Control", value+", private")
+		}
+	}
+	wrapped := httpsnoop.Wrap(w, httpsnoop.Hooks{
+		WriteHeader: func(write httpsnoop.WriteHeaderFunc) httpsnoop.WriteHeaderFunc {
+			return func(code int) { apply(); write(code) }
+		},
+		Write: func(write httpsnoop.WriteFunc) httpsnoop.WriteFunc {
+			return func(data []byte) (int, error) { apply(); return write(data) }
+		},
+		Flush: func(flush httpsnoop.FlushFunc) httpsnoop.FlushFunc {
+			return func() { apply(); flush() }
+		},
+		ReadFrom: func(read httpsnoop.ReadFromFunc) httpsnoop.ReadFromFunc {
+			return func(source io.Reader) (int64, error) { apply(); return read(source) }
+		},
+	})
+	// Also cover empty responses and headers retained by an outer panic handler.
+	defer apply()
+	next.ServeHTTP(wrapped, r)
+}
+
+// A field named private inside a quoted directive does not protect the response body.
+func privateCacheControl(value string) bool {
+	quoted, escaped, start := false, false, 0
+	for i := 0; i < len(value); i++ {
+		if escaped {
+			escaped = false
+			continue
+		}
+		if quoted && value[i] == '\\' {
+			escaped = true
+			continue
+		}
+		if value[i] == '"' {
+			quoted = !quoted
+		}
+		if value[i] == ',' && !quoted {
+			if strings.EqualFold(strings.TrimSpace(value[start:i]), "private") {
+				return true
+			}
+			start = i + 1
+		}
+	}
+	return !quoted && strings.EqualFold(strings.TrimSpace(value[start:]), "private")
 }
 
 func paymentCredential(headers []string) (*mpp.Credential, error) {
