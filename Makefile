@@ -6,6 +6,7 @@ consumer-smoke:
 docs:
 	go doc .
 	go doc ./mpp
+	go doc ./mpp/buyer
 
 format:
 	gofmt -w .

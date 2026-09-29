@@ -7,6 +7,7 @@ import (
 
 	inflow "github.com/inflowpayai/inflow-go"
 	"github.com/inflowpayai/inflow-go/mpp"
+	"github.com/inflowpayai/inflow-go/mpp/buyer"
 )
 
 func main() {
@@ -38,5 +39,16 @@ func main() {
 	parsed, err := mpp.ParseChallenges([]string{header})
 	if err != nil || len(parsed) != 1 || parsed[0].Request != encoded {
 		panic("challenge round trip failed")
+	}
+	client, err := buyer.New(buyer.Options{Options: options})
+	if err != nil {
+		panic(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err = client.Fulfil(ctx, challenge, buyer.PaymentOptions{})
+	var paymentError *buyer.Error
+	if !errors.As(err, &paymentError) || paymentError.Code != buyer.Cancelled || !errors.Is(err, context.Canceled) {
+		panic("buyer cancellation contract failed")
 	}
 }
