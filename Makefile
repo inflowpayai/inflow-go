@@ -9,6 +9,8 @@ docs:
 	go doc ./mpp/buyer
 	go doc ./mpp/seller
 	go doc ./x402
+	go doc ./x402/buyer
+	go doc ./x402/buyer/eip7702
 
 format:
 	gofmt -w .

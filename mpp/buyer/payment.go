@@ -13,6 +13,9 @@ import (
 
 // Payment shares one polling sequence and terminal outcome across concurrent waits.
 // Cancelling any wait abandons this payment for all waiters. Separate payments are independent.
+// A failed wait attempts approval cleanup so callers do not need to keep a failed
+// MPP handle alive just to cancel it.
+// This is an MPP client lifecycle choice, not a rule for the resumable x402 client.
 type Payment struct {
 	client     *Client
 	parent     context.Context

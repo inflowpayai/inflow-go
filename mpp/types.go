@@ -13,6 +13,8 @@ const (
 )
 
 // Challenge retains the issuer's encoded request and opaque values unchanged.
+// Upstream's decoded opaque map cannot preserve the original encoding used to bind
+// a credential to its challenge; do not rebuild these strings when echoing them.
 type Challenge struct {
 	ID          string  `json:"id"`
 	Realm       string  `json:"realm"`
@@ -38,6 +40,8 @@ type Settlement struct {
 }
 
 // Receipt preserves method-specific fields at the top level of the JSON object.
+// InFlow fields cannot be moved into upstream's nested extra object without
+// changing the receipt's wire format.
 type Receipt struct {
 	Method         string                     `json:"method"`
 	Reference      string                     `json:"reference"`
