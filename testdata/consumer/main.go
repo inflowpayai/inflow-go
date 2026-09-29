@@ -8,6 +8,7 @@ import (
 	inflow "github.com/inflowpayai/inflow-go"
 	"github.com/inflowpayai/inflow-go/mpp"
 	"github.com/inflowpayai/inflow-go/mpp/buyer"
+	"github.com/inflowpayai/inflow-go/mpp/seller"
 )
 
 func main() {
@@ -50,5 +51,12 @@ func main() {
 	var paymentError *buyer.Error
 	if !errors.As(err, &paymentError) || paymentError.Code != buyer.Cancelled || !errors.Is(err, context.Canceled) {
 		panic("buyer cancellation contract failed")
+	}
+	sellerClient, err := seller.New(options)
+	if err != nil {
+		panic(err)
+	}
+	if err := sellerClient.Load(ctx); !errors.Is(err, context.Canceled) {
+		panic("seller cancellation contract failed")
 	}
 }

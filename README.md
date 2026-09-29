@@ -183,6 +183,81 @@ retry that request or attempt to reverse payment. Inspect the result before retr
 application. `Payment-Receipt`, when supplied by the seller, remains on the response for decoding
 with `mpp.DecodeReceipt`.
 
+### Accepting payments
+
+Import `github.com/inflowpayai/inflow-go/mpp/seller` and create a client with an API key from an
+InFlow **Seller** account: [Sandbox](https://sandbox.inflowpay.ai) for testing or
+[Production](https://app.inflowpay.ai) for live payments. A Developer key does not authorize
+Seller configuration, validation, or broadcast.
+
+```go
+client, err := seller.New(inflow.Options{
+    Environment: inflow.Sandbox,
+    APIKey: os.Getenv("INFLOW_API_KEY"),
+})
+if err != nil {
+    return err
+}
+handler, err := client.Protect(seller.Route{
+    Realm: "api.example.com",
+    SecretKey: os.Getenv("MPP_SECRET_KEY"),
+    Offers: []seller.Offer{{Charge: &mpp.ChargeRequest{
+        Amount: "0.01",
+        Currency: "USDC",
+    }}},
+}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    w.Write([]byte("paid response"))
+}))
+if err != nil {
+    return err
+}
+mux.Handle("/paid", handler)
+```
+
+Use a private, high-entropy `MPP_SECRET_KEY`, separate from the InFlow API key. Keep the same
+signing key across instances serving the same routes. Changing it invalidates outstanding
+challenges. `Realm` identifies the protected service; `Lifetime` defaults to five minutes.
+
+An `Offer` selects exactly one of `Charge`, `Subscription`, or `Tempo`. Use multiple offers to
+advertise alternative prices or payment methods. InFlow offers obtain their recipient from the
+Seller account and select an advertised currency/rail combination. If multiple rails are available,
+set `MethodDetails.Rail`; required instrument identifiers must also be provided. Subscription
+requests include their recurring terms. Tempo requests specify the token address and recipient;
+their method details default to `feePayer: false` and `supportedModes: ["pull"]`.
+
+`Protect` returns an ordinary `http.Handler`. Without a valid payment it returns a `402` challenge.
+It verifies the echoed challenge signature, expiry, realm, opaque data, and configured offer before
+requesting platform validation or broadcast. It then sets `Payment-Receipt` and runs the
+application handler. Payment happens **before** the handler: a handler failure does not reverse it.
+The response is not buffered, so the handler can stream normally after payment succeeds.
+
+Place application authentication outside this handler. MPP uses `Authorization: Payment ...`;
+separate API-key or cookie authentication avoids conflicting with that header. `CanOffer` filters
+which configured offers are advertised. It is not access control and does not revoke credentials
+already issued for a matching offer. Optional `Opaque` is an encoded value signed into the
+challenge; use distinct values when otherwise identical offers must not be interchangeable across
+routes. The middleware does not bind the HTTP request body to payment; enforce application-specific
+request authorization in your own handler or middleware.
+
+For custom integrations, `Prepare` resolves a typed offer without minting a challenge. `Validate`
+performs the non-consuming platform check, `Broadcast` performs the terminal payment operation,
+and `Verify` validates then broadcasts. These direct methods do not establish that a credential
+belongs to your HTTP route: that local signature and route check belongs to `Protect`, or to your
+own protocol integration. Inspect `*seller.Error` for capability failures or rejected payment;
+`Problem` preserves the platform's problem JSON. Transport and account-role failures remain
+`*inflow.APIError`.
+
+Configuration loads on demand. `Load(ctx)` performs an explicit startup check; concurrent callers
+share the active load and successful results remain cached. A failed load permits a later attempt.
+The caller initiating a shared load owns its request context; cancellation can fail that shared
+attempt, while another call can retry. Cancelling a waiting caller does not cancel the owner's load.
+
+Configuration and validation allow up to three transient retries. Broadcast retries are enabled
+only when configuration advertises idempotency keys, and reuse one key throughout that operation.
+Pass a stable key to `Broadcast` when explicitly retrying an uncertain outcome; an empty key
+generates a fresh one. Without advertised idempotency support, broadcast makes one attempt.
+Never retry the entire protected application request solely because its response was lost.
+
 ### Upstream compatibility notes
 
 These observations apply to `mpp-go v0.2.0` ([source revision](https://github.com/tempoxyz/mpp-go/tree/41c35ed9e9332b9d224c1fc4af606efa98a24251)). They distinguish the library's general-purpose behavior from the requirements of the [InFlow MPP integration](https://github.com/inflowpayai/inflow-specs/blob/main/contracts/mpp.md). Recheck them when upgrading the dependency.
