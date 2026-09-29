@@ -10,6 +10,7 @@ import (
 	"github.com/inflowpayai/inflow-go/mpp/buyer"
 	"github.com/inflowpayai/inflow-go/mpp/seller"
 	"github.com/inflowpayai/inflow-go/x402"
+	x402buyer "github.com/inflowpayai/inflow-go/x402/buyer"
 	foundation "github.com/x402-foundation/x402/go/v2"
 )
 
@@ -54,6 +55,13 @@ func main() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	x402Client, err := x402buyer.New(x402buyer.Options{Options: options, External: foundation.Newx402Client()})
+	if err != nil {
+		panic(err)
+	}
+	if _, err := x402Client.Supported(ctx); !errors.Is(err, context.Canceled) {
+		panic("x402 buyer cancellation contract failed")
+	}
 	_, err = client.Fulfil(ctx, challenge, buyer.PaymentOptions{})
 	var paymentError *buyer.Error
 	if !errors.As(err, &paymentError) || paymentError.Code != buyer.Cancelled || !errors.Is(err, context.Canceled) {

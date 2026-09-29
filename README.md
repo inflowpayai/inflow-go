@@ -2,18 +2,88 @@
 
 Go SDK for accepting and making InFlow payments through MPP and x402.
 
-## Development
+## Using InFlow with the upstream Go SDKs
 
-Requires Go 1.26 or later and Make. Run `make verify` for formatting, module tidiness, compilation,
-static analysis, race-enabled tests, package documentation, and a build from a separate consumer
-module. `make format` formats Go source files.
+InFlow Go provides clients for making and accepting payments through InFlow. It uses the
+[MPP Go SDK](https://github.com/tempoxyz/mpp-go) and the
+[x402 Go SDK](https://github.com/x402-foundation/x402/tree/main/go), but it is not a drop-in
+replacement for either library. Adopt the InFlow clients explicitly; changing an import does
+not preserve every upstream behavior. You can keep using upstream packages alongside InFlow.
 
-CI runs on Go 1.26 and 1.27. Local tests require at least 99% statement coverage in every source
-file. Codecov evaluates 99% project and changed-line targets without tolerance. Its line-based
-measurements differ from Go's statement coverage; aim for 100% on both.
+In this guide, **managed payments** are handled through your InFlow account. **External-wallet
+payments** are signed by a wallet configured in your application. A **payment credential** or
+**payment payload** is the proof your application sends to the seller; obtaining it does not
+by itself confirm that the seller accepted the payment. A **hook** is an application callback:
+an after-hook runs after a payment payload has been created.
 
-The consumer check builds and runs a separate Go module against the local checkout. It checks
-configuration and error types independently of payment behavior.
+### Adopting the MPP clients
+
+The `mpp/buyer` client asks InFlow to obtain a payment credential rather than signing through
+a local wallet. Configure your InFlow account credentials and environment, then use `Fulfil`
+to obtain a credential or `Do` to pay an HTTP resource.
+The `mpp/seller` client uses an InFlow Seller account to validate and process payments.
+See [Managed buyer credentials](#managed-buyer-credentials) or
+[Accepting payments](#accepting-payments) for setup and examples.
+
+The following are intentional InFlow behaviors. The comparison applies to `mpp-go v0.2.0`;
+[upstream compatibility notes](#upstream-compatibility-notes) link to the relevant source.
+
+| Situation | Upstream MPP Go | InFlow Go | What your application needs to do |
+| --- | --- | --- | --- |
+| A paid request already uses `Authorization` | The buyer transport replaces it with the payment credential. | `Do` rejects the conflict before obtaining a credential. | Use a separate API-key header or cookie supported by the service. If the service only accepts application authentication in `Authorization`, its authentication design must accommodate MPP before this client can pay it. Manually sending the request does not resolve that conflict. |
+| A request body cannot be replayed | The transport creates a credential before trying to recreate the body. | `Do` checks replayability before payment. | Supply a working `Request.GetBody` for a request with a body. |
+| A seller checks a payment | The seller intent interface provides one `Verify` operation. | `Validate` checks without consuming payment; `Broadcast` submits the credential for payment processing. `Verify` combines both. | Use `Validate` only for a check. Use `Verify` or `Protect` when payment must be processed before serving the resource. |
+| Your service offers subscriptions | The charge convenience helpers select the charge intent. | InFlow supports purchasing a subscription and authorizing access under an existing subscription. | Sellers use `seller.Offer.Subscription`. Buyers pass a subscription challenge to `Fulfil`; supply `PaymentOptions.SubscriptionID` only to use an existing subscription rather than purchase one. See [Accepting payments](#accepting-payments) and [Managed buyer credentials](#managed-buyer-credentials). |
+| Your application forwards challenges or receipts | Upstream types decode opaque challenge data and do not retain all InFlow top-level receipt fields. | InFlow types preserve the encoded challenge fields and top-level receipt extensions. | Use the InFlow MPP codecs throughout that exchange; decoding and rebuilding through upstream types can lose information. |
+
+**Upstream limitation:** MPP over MCP is not supported by the released `mpp-go v0.2.0`
+integration or by InFlow Go. Do not assume the MPP-over-MCP integration available in InFlow
+Node is available here. InFlow Go does not define a competing transport while upstream support
+is absent. See the [compatibility notes](#upstream-compatibility-notes) for the package reference.
+
+### Composing an x402 client
+
+The `x402` package aliases the upstream V2 payment types, so they can cross the package boundary
+without conversion. The `x402/buyer` client adds InFlow-managed payment creation and approval
+waiting. It can also use an upstream client supplied through `Options.External` for external-wallet
+payments. That client's registered schemes and spending controls remain active.
+
+| Situation | InFlow behavior | What your application needs to do |
+| --- | --- | --- |
+| Both InFlow and an external wallet can pay | Matching managed requirements take precedence; external signing is the fallback when none match. | Configure `Prefer` for the managed scheme order. Use the upstream client directly for an external-wallet-only flow. |
+| An external wallet is supplied to the combined client | The client still loads InFlow account capabilities. | Supply InFlow authentication; an external wallet does not make this combined client anonymous. |
+| An application after-hook returns an error | Wrapper hooks propagate it on both payment routes. Upstream x402 Go v2.27.0 discards errors from its own after-hooks. | Register application callbacks through `Options.Hooks` when their errors must reach the caller. Hooks registered on `External` retain upstream behavior. |
+| The paid HTTP response is another `402` | `Do` returns it without creating a second payment. It does not run upstream callbacks that update payment state from the seller's response. | Inspect the response before trying another payment. For an external-wallet scheme that requires those callbacks, use the [upstream HTTP client](#application-hooks-and-http-requests) instead of InFlow's `Do`. |
+
+These are wrapper behaviors, not changes to the x402 wire protocol. The upstream after-hook
+behavior is visible in its [v2.27.0 client implementation](https://github.com/x402-foundation/x402/blob/go/v2.27.0/go/client.go#L811-L817).
+See [x402 Buyer](#x402-buyer) for setup and opt-in external-wallet sponsorship.
+
+### Waiting, retrying, and cancelling approvals
+
+An InFlow payment can require a person's approval. `Prepare` creates the payment and returns a
+`Payment` object; `Wait` waits for its credential or payload. The two clients intentionally differ in what
+a failed wait means. This is an SDK lifecycle choice, not a requirement of MPP or x402.
+
+| Operation | After a failed wait | What your application needs to do |
+| --- | --- | --- |
+| MPP `Payment.Wait` | The payment object stores the error and attempts approval cancellation for up to five seconds. Later waits return that error. Cancelling any waiter abandons the payment for all waiters. | Do not call `Wait` expecting it to resume. Inspect the outcome before deciding to start another payment. |
+| x402 `Payment.Wait` | The approval is not automatically cancelled. A later wait can poll the same transaction. | Keep the handle and call `Wait` with a fresh context to resume, or call `Cancel` to abandon it. Resuming does not guarantee that the server will approve the payment. |
+| x402 `Client.Sign` | This one-shot operation attempts approval cancellation for up to five seconds after a failed wait. | Use `Prepare` and `Wait` instead when your application needs to resume waiting. |
+
+For MPP, cancelling the context passed to `Prepare` cancels the payment operation, including
+subsequent waiting. Its `WaitTimeout` starts when creation returns, even if `Wait` has not been
+called yet. For x402, the preparation context applies only until `Prepare` returns; `WaitTimeout`
+starts separately for each new polling attempt. Concurrent x402 waits share the first caller's
+polling context. Cancelling a later caller stops only that caller's wait;
+cancelling the first stops the shared attempt, but a later
+attempt can resume it.
+
+Once an x402 payload is received, the handle retains it and the result of its after-hooks. An
+after-hook failure is reported without cancelling the ready payment or rerunning the hook on
+another wait. Receiving a payload does not itself prove the seller accepted or settled it.
+Neither protocol's cancellation operation reverses a completed payment, and best-effort approval
+cleanup can fail. Inspect uncertain outcomes before starting another purchase.
 
 ## Package design
 
@@ -52,6 +122,134 @@ amounts or convert them into atomic units. Non-plain notation such as `1e3` is r
 The upstream payload and extension maps can contain `json.Number`; when decoding JSON with large
 numeric proof values, use `json.Decoder.UseNumber` to avoid conversion to floating-point numbers.
 These types and declarations do not validate signatures, authorize payments, or execute sponsorship.
+
+### x402 Buyer
+
+Import `github.com/inflowpayai/inflow-go/x402/buyer` to obtain managed payments or compose an
+external-wallet client from `github.com/x402-foundation/x402/go/v2`. `New` performs no requests.
+`Supported` loads the account's supported scheme/network pairs and caches them for one hour.
+Concurrent loads share one request; a failed load can be retried.
+
+The combined Buyer client needs an InFlow API key or OAuth access token for that capability lookup:
+use [Sandbox](https://sandbox.inflowpay.ai) for testing or [Production](https://app.inflowpay.ai) for
+live payments. Supplying an external wallet does not bypass this lookup. For external-wallet-only
+payments without an InFlow account, use the upstream client directly; the opt-in sponsorship
+extension below can also be registered on that client.
+
+```go
+client, err := buyer.New(buyer.Options{
+    Options: inflow.Options{
+        Environment: inflow.Sandbox,
+        APIKey: os.Getenv("INFLOW_API_KEY"),
+    },
+})
+if err != nil {
+    return err
+}
+payment, err := client.Sign(ctx, required, buyer.SignOptions{})
+```
+
+`required` is the seller's decoded V2 `PaymentRequired`. `Sign` prefers managed `balance`, then
+managed `exact`. Set `Prefer` to change that order. Policies filter candidates before selection.
+When several balance assets match, a fresh account balance lookup can select an affordable asset;
+an unavailable balance lookup falls back to the first match. InFlow remains the authority on
+available funds. Managed signing does not support Permit2.
+
+Set `External` to a configured upstream client for requirements that do not match managed
+capabilities. Its registered schemes and spending limits remain in effect. A policy rejection
+does not bypass the policy by switching to the external path. `SignOptions.PaymentID` and
+`TransactionRequestExtensions` apply to managed signing. The returned `EncodedPayload` preserves
+the server's signed encoding; use it directly as `PAYMENT-SIGNATURE`.
+
+#### Waiting for approval
+
+Use `Select` to choose a managed requirement, then pass a `PaymentRequired` containing that one
+requirement to `Prepare`. The returned `Payment` exposes `ApprovalID`, `TransactionID`, `Status`,
+`Wait`, and `Cancel`. Preparation creates the transaction once and does not poll.
+
+```go
+selected, err := client.Select(ctx, required)
+if err != nil {
+    return err
+}
+if selected == nil {
+    return errors.New("no InFlow-managed payment option matches this request")
+}
+selectedRequired := required
+selectedRequired.Accepts = []x402.PaymentRequirements{*selected}
+pending, err := client.Prepare(ctx, selectedRequired, buyer.SignOptions{})
+if err != nil {
+    return err
+}
+waitContext, stopWaiting := context.WithTimeout(ctx, 30*time.Second)
+payment, err := pending.Wait(waitContext)
+stopWaiting()
+```
+
+This example uses `errors`, `time`, and the `x402` package alongside the Buyer client.
+`required` is the seller's decoded `PaymentRequired`. A nil selection means no managed option
+matches; `Prepare` is for managed payments only. Use `Sign` with a configured `External` client
+when you want the external-wallet fallback.
+
+If this wait times out, keep `pending` and call `pending.Wait` with a fresh context to resume the
+same approval. To abandon it, call `pending.Cancel` with a live context. A timeout does not imply
+that the payment failed or that its approval was cancelled. Each wait attempt has its own
+`WaitTimeout` budget, defaulting to fifteen minutes; polling defaults to five seconds.
+
+See [Waiting, retrying, and cancelling approvals](#waiting-retrying-and-cancelling-approvals)
+for concurrent waits, after-hook failures, and the difference from MPP's payment lifetime.
+
+#### Application hooks and HTTP requests
+
+Configure application callbacks through `Options.Hooks`. Before-hook errors stop payment creation.
+After-hook errors propagate on both managed and external-wallet paths. A failure hook can supply a
+replacement payload for one-shot signing, but not for a prepared payment tied to existing approval
+and transaction identifiers. Hooks registered directly on the upstream client retain upstream
+behavior, including its non-fatal after-hook errors. Callbacks must honor their contexts and support
+concurrent operations. Hook inputs are independent copies of payment data.
+
+`Do(request, options)` sends an unpaid request and at most one paid replay. It preserves application
+authentication, does not attach InFlow API credentials to the resource request, and never follows
+redirects. A nonempty body must have `Request.GetBody`; replayability is checked before signing.
+The caller closes the returned response body. `Do` returns a second 402 to the caller rather than
+automatically authorizing another payment.
+
+Some external-wallet payment schemes keep state that must be updated after reading the seller's
+response. InFlow's `Do` does not call those upstream response callbacks. For those schemes, use
+`Newx402HTTPClient(external)` and `WrapHTTPClientWithPayment` from
+[`github.com/x402-foundation/x402/go/v2/http`](https://github.com/x402-foundation/x402/blob/go/v2.27.0/go/http/client.go#L148)
+instead. That upstream transport calls the scheme's response handlers and applies its own retry
+and redirect behavior; InFlow's single-paid-request and no-redirect guarantees do not apply to it.
+
+#### External-wallet sponsorship
+
+EIP-2612 support belongs to the upstream EVM exact signer. Configure its read-contract and typed-data
+signing capabilities; the upstream implementation can attach a permit when the seller advertises
+EIP-2612 sponsorship and Permit2 allowance is insufficient.
+
+For InFlow's EIP-7702 sponsorship, import the opt-in `x402/buyer/eip7702` package and register its
+extension on the upstream client. The main Buyer package does not import its blockchain dependencies.
+
+```go
+extension, err := eip7702.New(eip7702.Options{
+    Environment: inflow.Sandbox,
+    Signer: wallet,
+    Consent: confirmDelegation,
+})
+if err != nil {
+    return err
+}
+external.RegisterExtension(extension)
+```
+
+`wallet` implements `eip7702.Signer`; `confirmDelegation` receives the context and delegation
+authorization and returns consent or an error. Delegation can persist even if the purchase fails,
+so obtain the owner's consent explicitly. The extension only handles advertised exact Permit2
+payments. It checks allowance, uses the caller-configured InFlow preparation endpoint, verifies
+the exact approval/settlement batch and pinned contracts, and signs only after validating the
+operation hash. It never broadcasts. The signer must support concurrent calls and must honor
+cancellation. `SignMessage` applies Ethereum's personal-message prefix to the operation hash;
+it must not sign the hash as a raw transaction digest.
 
 ### Shared configuration and errors
 
@@ -294,16 +492,29 @@ These observations apply to `mpp-go v0.2.0` ([source revision](https://github.co
 
 1. **Preserving application authentication.** The upstream buyer transport puts the payment credential in `Authorization`, replacing an existing value. An authenticated resource may already use that header for its application session. InFlow's HTTP integration rejects that conflict before payment and preserves separate cookie/API-key authentication. It does not invent an alternate payment header. [Source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/client/transport.go#L99-L106).
 
-2. **Checking request replay before payment.** The upstream transport creates a payment credential before checking whether the request body can be replayed. For a body without `GetBody`, this can invoke the payment method and then fail locally without sending the paid request. InFlow must establish replayability before invoking a payment method. [Source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/client/transport.go#L92-L125).
+2. **Checking request replay before payment.** The upstream transport creates a payment credential before checking whether the request body can be replayed. For a body without `GetBody`, this can invoke the payment method and then fail locally without sending the paid request. InFlow checks that it can recreate the body before requesting payment. Supply `Request.GetBody`; `http.NewRequest` supplies it automatically for `strings.Reader`, `bytes.Reader`, and `bytes.Buffer`. [Source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/client/transport.go#L92-L125).
 
-3. **Separate validation and broadcast.** The upstream seller `Intent` interface exposes one `Verify` operation returning a receipt. InFlow exposes non-mutating validation separately from the terminal broadcast operation. Its seller integration must retain both operations rather than hide broadcasting inside an API presented as validation. The upstream interface can represent a combined operation, but not both phases independently. [Source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/server/server.go#L17-L27).
+3. **Separate validation and broadcast.** The upstream seller `Intent` interface exposes one `Verify` operation returning a receipt. InFlow's `Validate` checks a credential without consuming payment; `Broadcast` submits it for payment processing. Keeping them separate lets an application check a credential without unexpectedly processing a payment. Use InFlow's `Verify` to perform both, or `Protect` to perform both before running an HTTP handler. [Source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/server/server.go#L17-L27).
 
-4. **Subscription entry points.** The upstream generic verification function accepts an arbitrary intent, but the `Charge` helper selects `charge` explicitly, and `ComposeMiddleware` operates on charge configurations. InFlow subscriptions therefore need their own orchestration; this is a limitation of those convenience APIs, not an inability to encode subscription challenges. [Charge source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/server/server.go#L148-L164), [composition source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/server/compose.go#L12-L37).
+4. **Subscription entry points.** The upstream generic verification function accepts an arbitrary intent, but the `Charge` helper selects `charge` explicitly, and `ComposeMiddleware` operates on charge configurations. This limits those convenience APIs, not the protocol's ability to encode subscription challenges. InFlow sellers advertise subscriptions with `seller.Offer.Subscription`. Buyers use `Fulfil` to purchase one, or supply `PaymentOptions.SubscriptionID` to authorize access under an existing subscription. [Charge source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/server/server.go#L148-L164), [composition source](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/server/compose.go#L12-L37).
 
-5. **Preserving receipt fields.** The upstream receipt type has a fixed set of fields and a nested `extra` object. InFlow receipts also carry top-level fields such as `challengeId`, `subscriptionId`, and `settlement`. The upstream receipt parser/formatter does not preserve those top-level fields; moving them into `extra` changes the wire format. InFlow needs a receipt representation and codec that retain its contract. [Type](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/mpp/receipt.go#L7-L14), [parser and formatter](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/mpp/parse.go#L502-L537).
+5. **Preserving receipt fields.** The upstream receipt type has a fixed set of fields and a nested `extra` object. InFlow receipts also carry top-level fields such as `challengeId`, `subscriptionId`, and `settlement`. The upstream receipt parser/formatter does not preserve those top-level fields; moving them into `extra` changes the wire format. Use InFlow's `DecodeReceipt` and `EncodeReceipt` to preserve them. [Type](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/mpp/receipt.go#L7-L14), [parser and formatter](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/mpp/parse.go#L502-L537).
 
 6. **Server dependency coupling.** The upstream server package imports its Tempo package, which brings Ethereum, Tempo, and Redis packages into the compilation dependencies. InFlow delegates payment processing to its platform and does not need that entire server implementation for this purpose. Using the protocol primitives avoids this coupling. The upstream module's web-framework requirements do not mean every framework is compiled into every consumer. This distinction was checked with `go list -deps`. [Server imports](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/server/server.go#L9-L15), [Tempo Redis dependency](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/tempo/redis_store.go#L3-L8).
 
 7. **MPP over MCP is not supported.** The released Go library has no MCP integration package corresponding to the `mppx/mcp/client` integration used by InFlow Node. InFlow Go does not implement an independent MPP-over-MCP transport. Support depends on an upstream implementation so that integrators do not adopt an InFlow-specific design that could conflict with the upstream protocol integration. This limitation concerns MPP, not x402's separate MCP integration. [Released package tree](https://github.com/tempoxyz/mpp-go/tree/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg).
 
 8. **Preserving opaque challenge data.** The upstream challenge parser decodes `opaque` into a string map, and its formatter encodes that map again. An issuer's original encoded value can therefore change. InFlow keeps that field as its original string and uses its own wire types, while reusing compatible upstream header primitives. [Parser and formatter](https://github.com/tempoxyz/mpp-go/blob/41c35ed9e9332b9d224c1fc4af606efa98a24251/pkg/mpp/parse.go#L213-L298).
+
+## Development
+
+Requires Go 1.26 or later and Make. Run `make verify` for formatting, module tidiness, compilation,
+static analysis, race-enabled tests, package documentation, and a build from a separate consumer
+module. `make format` formats Go source files.
+
+CI runs on Go 1.26 and 1.27. Local tests require at least 99% statement coverage in every source
+file. Codecov evaluates 99% project and changed-line targets without tolerance. Its line-based
+measurements differ from Go's statement coverage; aim for 100% on both.
+
+The consumer check builds and runs a separate Go module against the local checkout. It checks
+configuration and error types independently of payment behavior.

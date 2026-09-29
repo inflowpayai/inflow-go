@@ -29,6 +29,9 @@ func (c *Client) Do(request *http.Request, options PaymentOptions) (*http.Respon
 	}
 	// Closing without draining avoids waiting for an unbounded challenge body.
 	response.Body.Close()
+	// MPP needs Authorization for its payment credential. Replacing an application's
+	// existing authentication, as the upstream transport does, would remove credentials
+	// the service may require to identify or authorize the caller.
 	if request.URL.User != nil {
 		return nil, ErrAuthorizationConflict
 	}
@@ -70,6 +73,8 @@ func (c *Client) Do(request *http.Request, options PaymentOptions) (*http.Respon
 			return nil, &Error{Code: Expired}
 		}
 	}
+	// Prove the request can be replayed before obtaining a credential; payment must
+	// not start only to fail locally because its request body has already been consumed.
 	retry := request.Clone(request.Context())
 	closeReplay := false
 	if request.Body != nil && request.Body != http.NoBody {

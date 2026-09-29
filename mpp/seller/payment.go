@@ -28,6 +28,8 @@ type Validation struct {
 
 // Validate asks the platform to check a credential without consuming payment.
 // HTTP integrations must first verify the challenge's provenance and route binding.
+// Keep this separate from Broadcast: callers may need a check without committing
+// payment. Combining both behind validation would introduce an unexpected payment side effect.
 func (c *Client) Validate(ctx context.Context, credential mpp.Credential) (Validation, error) {
 	if err := payloadValid(credential); err != nil {
 		return Validation{}, err
