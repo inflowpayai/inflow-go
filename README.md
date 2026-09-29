@@ -23,6 +23,36 @@ packages, with shared internal HTTP implementation. The client accepts an option
 network activity. Operations load configuration when needed and permit a later attempt after a
 failed load.
 
+### x402 Core
+
+Import `github.com/inflowpayai/inflow-go/x402` for V2 payment types, InFlow configuration types,
+payment identifiers, and sponsorship declarations. Standard payment types are aliases of
+`github.com/x402-foundation/x402/go/v2` v2.27.0 types: pass them to upstream APIs without conversions.
+Importing this package does not import blockchain signers or framework adapters.
+
+```go
+id, err := x402.GeneratePaymentID(x402.DefaultPaymentIDPrefix)
+if err != nil {
+    return err
+}
+entry := x402.PaymentIdentifierEntry(x402.DeclarePaymentIdentifier(), id)
+payload := x402.PaymentPayload{
+    X402Version: x402.Version,
+    Extensions: map[string]any{x402.PaymentIdentifier: entry},
+}
+```
+
+This illustrates the extension field, not a complete signed payment. The declaration advertises
+`required: false`. `ReadPaymentIdentifier` and `PaymentIdentifierEntry` return nil for malformed
+declarations or invalid identifiers. Entries preserve additional information and schema fields,
+without modifying the supplied declaration. Use an empty prefix to generate an unprefixed identifier.
+
+`NormalizeDecimalString` removes insignificant zeroes using string operations; it does not round
+amounts or convert them into atomic units. Non-plain notation such as `1e3` is returned unchanged.
+The upstream payload and extension maps can contain `json.Number`; when decoding JSON with large
+numeric proof values, use `json.Decoder.UseNumber` to avoid conversion to floating-point numbers.
+These types and declarations do not validate signatures, authorize payments, or execute sponsorship.
+
 ### Shared configuration and errors
 
 The protocol clients accept `inflow.Options`. Set `Environment: inflow.Sandbox` for testing;
