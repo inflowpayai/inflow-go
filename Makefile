@@ -7,6 +7,7 @@ docs:
 	go doc .
 	go doc ./mpp
 	go doc ./mpp/buyer
+	go doc ./mpp/seller
 
 format:
 	gofmt -w .
