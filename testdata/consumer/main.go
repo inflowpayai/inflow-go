@@ -9,9 +9,16 @@ import (
 	"github.com/inflowpayai/inflow-go/mpp"
 	"github.com/inflowpayai/inflow-go/mpp/buyer"
 	"github.com/inflowpayai/inflow-go/mpp/seller"
+	"github.com/inflowpayai/inflow-go/x402"
+	foundation "github.com/x402-foundation/x402/go/v2"
 )
 
 func main() {
+	var requirement foundation.PaymentRequirements = x402.PaymentRequirements{Scheme: x402.SchemeBalance, Network: x402.NetworkInflow}
+	id, idErr := x402.GeneratePaymentID(x402.DefaultPaymentIDPrefix)
+	if idErr != nil || x402.PaymentIdentifierEntry(x402.DeclarePaymentIdentifier(), id) == nil || requirement.Scheme != "balance" {
+		panic("x402 core contract failed")
+	}
 	options := inflow.Options{
 		Environment: inflow.Sandbox,
 		AccessToken: func(context.Context) (string, error) { return "test-only-token", nil },
