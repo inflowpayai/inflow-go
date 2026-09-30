@@ -666,3 +666,31 @@ measurements differ from Go's statement coverage; aim for 100% on both.
 
 The consumer check builds and runs a separate Go module against the local checkout. It checks
 configuration and error types independently of payment behavior.
+
+### Node interoperability
+
+The `Node interoperability` workflow runs real HTTP exchanges in both directions: a Go Buyer
+against Node Seller middleware and a Node Buyer against Go Seller middleware. It covers MPP
+charges, subscription purchases, existing-subscription authorization, Tempo charges, and x402
+balance and exact payments. Cases include success, pending approvals where applicable, rejected
+validation, failed settlement, and failed application handlers. Assertions check payment data,
+receipts, platform credential isolation, and handler/settlement ordering.
+
+The payment platform is a loopback simulator. These tests do not sign real transactions, move
+money, or certify blockchain settlement. The Node MPP fetch client is configured for one payment
+attempt (`maxPaymentRetries: 1`); this prevents its automatic retries from purchasing again after
+a rejected paid request. Existing-subscription authorization returns a credential directly and
+does not have a pending-purchase case.
+
+For a local run, use Node 24 and a clean `inflow-node` checkout at the revision in
+`interop/node.lock.json`. In that checkout run `pnpm install --frozen-lockfile` and `pnpm build`,
+then run this command from the Go repository:
+
+```sh
+node scripts/interoperability.mjs /path/to/inflow-node /tmp/inflow-interoperability.json
+```
+
+Choose an unused report filename; the runner refuses to overwrite an existing report. Reports
+record SDK revisions, toolchain versions, Go dependencies, and each case's platform requests.
+Hosted reports are available from the workflow's artifacts. The peer programs live in `interop/`
+and are test tooling, not SDK packages intended for application use.
