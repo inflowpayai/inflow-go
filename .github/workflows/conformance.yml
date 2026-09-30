@@ -1,0 +1,66 @@
+name: shared conformance
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  conformance:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [1.26.x, 1.27.x]
+    defaults:
+      run:
+        working-directory: sdk
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: sdk
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Read contract pin
+        id: pin
+        run: |
+          node --input-type=module -e '
+            import { readFileSync, appendFileSync } from "node:fs";
+            const { revision } = JSON.parse(readFileSync("conformance/inflow-specs.lock.json", "utf8"));
+            if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("Invalid contract revision");
+            appendFileSync(process.env.GITHUB_OUTPUT, `revision=${revision}\n`);
+          '
+      - uses: actions/checkout@v7
+        with:
+          repository: inflowpayai/inflow-specs
+          ref: ${{ steps.pin.outputs.revision }}
+          path: contract
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: contract/package.json
+      - run: pnpm install --frozen-lockfile
+        working-directory: contract
+      - run: node --test scripts/conformance.test.mjs
+      - name: Run shared suites
+        run: |
+          mkdir -p "$RUNNER_TEMP/inflow-go-reports"
+          node scripts/conformance.mjs --contract-root ../contract --output-dir "$RUNNER_TEMP/inflow-go-reports"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: inflow-go-conformance-${{ matrix.go }}
+          path: ${{ runner.temp }}/inflow-go-reports/*.json
+          if-no-files-found: warn
+          retention-days: 14
