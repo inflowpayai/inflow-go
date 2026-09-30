@@ -2,6 +2,9 @@
 
 Go SDK for accepting and making InFlow payments through MPP and x402.
 
+For development checks and reproducible SDK conformance reports, see
+[Shared conformance](conformance/README.md).
+
 ## Run an example
 
 The [runnable examples](examples/README.md) walk through MPP and x402 payments with separate
@@ -598,6 +601,11 @@ It verifies the echoed challenge signature, expiry, realm, opaque data, and conf
 requesting platform validation or broadcast. It then sets `Payment-Receipt` and runs the
 application handler. Payment happens **before** the handler: a handler failure does not reverse it.
 The response is not buffered, so the handler can stream normally after payment succeeds.
+
+Paid responses include `Cache-Control: private` so shared caches must not reuse them for other
+users. `Protect` preserves your handler's other cache directives and adds `private` when necessary.
+This does not prohibit browser-local caching; set `Cache-Control: no-store` in your handler when
+responses must not be stored.
 
 Place application authentication outside this handler. MPP uses `Authorization: Payment ...`;
 separate API-key or cookie authentication avoids conflicting with that header. `CanOffer` filters
