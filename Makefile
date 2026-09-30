@@ -20,8 +20,7 @@ format-check:
 	test -z "$$(gofmt -l .)"
 
 test:
-	go test -race -coverprofile=coverage.out ./...
-	awk -f scripts/check-coverage.awk coverage.out
+	sh scripts/test.sh
 
 tidy-check:
 	go mod tidy -diff

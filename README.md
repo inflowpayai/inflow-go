@@ -2,6 +2,13 @@
 
 Go SDK for accepting and making InFlow payments through MPP and x402.
 
+## Run an example
+
+The [runnable examples](examples/README.md) walk through MPP and x402 payments with separate
+buyer and seller programs. They use Sandbox accounts, local HTTP sellers, and the public clients.
+Start there for setup commands, required credentials, expected output, subscriptions, and manual
+approval waiting or cancellation.
+
 ## Using InFlow with the upstream Go SDKs
 
 InFlow Go provides clients for making and accepting payments through InFlow. It uses the
