@@ -199,6 +199,82 @@ func TestSharedBuyerCases(t *testing.T) {
 	}
 }
 
+func TestPollBeyondBudgetWaitsForTimeoutOrCancellation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		advice   string
+		poll     time.Duration
+		cancel   bool
+		wantPoll bool
+	}{
+		{name: "server delay", advice: `,"retryAfterSeconds":60`, poll: time.Millisecond},
+		{name: "default delay", poll: time.Second},
+		{name: "equal delay", poll: 50 * time.Millisecond},
+		{name: "cancel during delay", advice: `,"retryAfterSeconds":60`, poll: time.Millisecond, cancel: true},
+		{name: "cancel before scheduled poll", poll: 500 * time.Millisecond, cancel: true},
+		{name: "poll before deadline", advice: `,"retryAfterSeconds":0`, poll: time.Millisecond, wantPoll: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			encoded := credential(t)
+			var polls, cancellations atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/transactions/mpp":
+					fmt.Fprintf(w, `{"state":"pending","transactionId":%q,"approvalId":%q%s}`, transactionID, approvalID, test.advice)
+				case r.Method == http.MethodPost && r.URL.Path == "/v1/approvals/"+approvalID+"/cancel":
+					if r.Context().Err() != nil {
+						t.Error("cleanup used a cancelled request context")
+					}
+					cancellations.Add(1)
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodGet && r.URL.Path == "/v1/transactions/"+transactionID+"/mpp":
+					polls.Add(1)
+					fmt.Fprintf(w, `{"state":"ready","credential":%q}`, encoded)
+				default:
+					t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			client := newClient(t, server, func(options *buyer.Options) {
+				options.PollInterval = test.poll
+				options.WaitTimeout = 50 * time.Millisecond
+				if test.cancel || test.wantPoll {
+					options.WaitTimeout = time.Second
+				}
+			})
+			payment, err := client.Prepare(context.Background(), challenge(), buyer.PaymentOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if test.cancel {
+				timer := time.AfterFunc(10*time.Millisecond, cancel)
+				defer timer.Stop()
+			}
+			result, err := payment.Wait(ctx)
+			if test.wantPoll {
+				if err != nil || result.Payload["transactionId"] != transactionID || polls.Load() != 1 || cancellations.Load() != 0 {
+					t.Fatalf("successful poll: result=%v error=%v polls=%d cancellations=%d", result, err, polls.Load(), cancellations.Load())
+				}
+				return
+			}
+			code, cause := buyer.Timeout, context.DeadlineExceeded
+			if test.cancel {
+				code, cause = buyer.Cancelled, context.Canceled
+			}
+			failure := requireCode(t, err, code)
+			if !errors.Is(err, cause) || failure.TransactionID != transactionID || failure.ApprovalID != approvalID {
+				t.Fatal(failure)
+			}
+			if polls.Load() != 0 || cancellations.Load() != 1 {
+				t.Fatalf("polls=%d cancellations=%d", polls.Load(), cancellations.Load())
+			}
+		})
+	}
+}
+
 func TestValidationBeforeNetwork(t *testing.T) {
 	for _, options := range []buyer.Options{{PollInterval: -1}, {WaitTimeout: -1}, {Options: inflow.Options{Environment: "bad"}}} {
 		if _, err := buyer.New(options); err == nil {

@@ -1,0 +1,179 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Stable version without v (for example 0.1.0)
+        required: true
+        type: string
+      dry_run:
+        description: Verify only; do not create a tag or release
+        default: true
+        required: true
+        type: boolean
+  pull_request:
+    paths:
+      - .github/workflows/release.yml
+      - scripts/release-version*.mjs
+      - scripts/verify-consumer.sh
+
+concurrency:
+  group: inflow-go-release-${{ github.event_name == 'pull_request' && github.ref || 'manual' }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+    defaults:
+      run:
+        working-directory: sdk
+    env:
+      RELEASE_VERSION: ${{ github.event_name == 'workflow_dispatch' && inputs.version || '0.1.0' }}
+      DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || inputs.dry_run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: sdk
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          cache: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - name: Validate release inputs
+        id: version
+        run: |
+          node --test scripts/release-version.test.mjs
+          tag=$(node scripts/release-version.mjs)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+      - name: Read verification pins
+        id: pins
+        run: |
+          node --input-type=module -e '
+            import { readFileSync, appendFileSync } from "node:fs";
+            for (const [name, file] of [["contract", "conformance/inflow-specs.lock.json"], ["node", "interop/node.lock.json"]]) {
+              const { revision } = JSON.parse(readFileSync(file));
+              if (!/^[0-9a-f]{40}$/.test(revision)) throw new Error("Invalid revision");
+              appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${revision}\n`);
+            }
+          '
+      - uses: actions/checkout@v7
+        with:
+          repository: inflowpayai/inflow-specs
+          ref: ${{ steps.pins.outputs.contract }}
+          path: contract
+          persist-credentials: false
+      - uses: actions/checkout@v7
+        with:
+          repository: inflowpayai/inflow-node
+          ref: ${{ steps.pins.outputs.node }}
+          path: node-sdk
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+        with:
+          package_json_file: node-sdk/package.json
+      - run: pnpm install --frozen-lockfile
+        working-directory: node-sdk
+      - run: pnpm build
+        working-directory: node-sdk
+      - run: pnpm install --frozen-lockfile
+        working-directory: contract
+      - name: Verify candidate
+        run: |
+          make verify
+          node --test scripts/conformance.test.mjs
+          mkdir -p "$RUNNER_TEMP/release-reports"
+          node scripts/conformance.mjs --contract-root ../contract --output-dir "$RUNNER_TEMP/release-reports"
+          node scripts/interoperability.mjs ../node-sdk "$RUNNER_TEMP/release-reports/interoperability.json"
+      - name: Record release evidence
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          CONTRACT_REVISION: ${{ steps.pins.outputs.contract }}
+          NODE_REVISION: ${{ steps.pins.outputs.node }}
+        run: |
+          node --input-type=module -e '
+            import { writeFileSync } from "node:fs";
+            import { execFileSync } from "node:child_process";
+            const env = process.env;
+            writeFileSync(`${env.RUNNER_TEMP}/release-reports/release.json`, JSON.stringify({
+              tag: env.TAG, revision: env.GITHUB_SHA, dry_run: env.DRY_RUN === "true",
+              contract_revision: env.CONTRACT_REVISION, node_revision: env.NODE_REVISION,
+              workflow_run: `${env.GITHUB_SERVER_URL}/${env.GITHUB_REPOSITORY}/actions/runs/${env.GITHUB_RUN_ID}`,
+              go: execFileSync("go", ["version"], { encoding: "utf8" }).trim(),
+              modules: execFileSync("go", ["list", "-m", "all"], { encoding: "utf8" }).trim().split("\n")
+            }, null, 2) + "\n");
+          '
+          cp coverage.out "$RUNNER_TEMP/release-reports/coverage.out"
+          cd "$RUNNER_TEMP/release-reports"
+          sha256sum *.json coverage.out > SHA256SUMS
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: inflow-go-release-evidence
+          path: ${{ runner.temp }}/release-reports/
+          if-no-files-found: warn
+          retention-days: 30
+
+  publish:
+    needs: release
+    if: github.event_name == 'workflow_dispatch' && !inputs.dry_run && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      TAG: ${{ needs.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.x
+          cache: false
+      - uses: actions/download-artifact@v8
+        with:
+          name: inflow-go-release-evidence
+          path: release-reports
+      - name: Verify report checksums
+        working-directory: release-reports
+        run: sha256sum --check SHA256SUMS
+      - name: Check immutable release target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if git show-ref --verify --quiet "refs/tags/$TAG"; then
+            test "$(git rev-parse "$TAG^{commit}")" = "$GITHUB_SHA"
+          fi
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; do not replace published releases." >&2
+            exit 1
+          fi
+      - name: Create immutable tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if ! git show-ref --verify --quiet "refs/tags/$TAG"; then
+            tag_sha=$(gh api "repos/$GITHUB_REPOSITORY/git/tags" \
+              -f tag="$TAG" -f message="InFlow Go $TAG" -f object="$GITHUB_SHA" -f type=commit --jq .sha)
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$TAG" -f sha="$tag_sha"
+          fi
+      - name: Verify published module through the Go proxy
+        run: sh scripts/verify-consumer.sh "$TAG"
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" release-reports/* \
+            --title "InFlow Go $TAG" --generate-notes --verify-tag
