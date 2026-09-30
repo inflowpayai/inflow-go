@@ -134,6 +134,8 @@ func (p *Payment) run() {
 			return
 		}
 		delay := p.client.pollInterval
+		deadline, _ := p.ctx.Deadline()
+		remaining := time.Until(deadline)
 		if current.RetryAfterSeconds != nil {
 			seconds := *current.RetryAfterSeconds
 			if seconds < 0 {
@@ -141,12 +143,15 @@ func (p *Payment) run() {
 				return
 			}
 			// Cap before conversion to Duration so large advice cannot overflow.
-			deadline, _ := p.ctx.Deadline()
-			remaining := time.Until(deadline)
 			delay = remaining
 			if seconds <= int64(remaining/time.Second) {
 				delay = time.Duration(seconds) * time.Second
 			}
+		}
+		if delay >= remaining {
+			// A second timer at the deadline can wake before context cancellation is recorded.
+			<-p.ctx.Done()
+			continue
 		}
 		if err := platform.Wait(p.ctx, delay); err != nil {
 			continue

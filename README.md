@@ -694,3 +694,39 @@ Choose an unused report filename; the runner refuses to overwrite an existing re
 record SDK revisions, toolchain versions, Go dependencies, and each case's platform requests.
 Hosted reports are available from the workflow's artifacts. The peer programs live in `interop/`
 and are test tooling, not SDK packages intended for application use.
+
+### Releases
+
+Go versions come from immutable Git tags such as `v0.1.0`; there is no separate version constant
+to update. Install a release with `go get github.com/inflowpayai/inflow-go@v0.1.0`, replacing the
+example version with the release you want. All packages in this repository share that version.
+The SDK user-agent reads the installed module version. Local `replace` builds report `devel`.
+
+Maintainers use [Actions → Release](https://github.com/inflowpayai/inflow-go/actions/workflows/release.yml):
+
+1. Select **Run workflow**, choose **main**, and enter a stable version without `v`.
+2. Leave **dry_run** checked. The workflow runs the repository checks, a separate local consumer,
+   shared conformance, and Node interoperability. Download `inflow-go-release-evidence` from the
+   completed run to inspect the reports. A dry run does not create a tag or GitHub release.
+3. After reviewing the evidence and approving publication, run the workflow from **main** with the
+   same version and **dry_run** unchecked. It verifies the selected commit again, creates an
+   annotated tag, installs that version through `proxy.golang.org` in a separate consumer module
+   without a local replacement, and publishes the GitHub release with its verification reports.
+
+No registry account, API key, or repository secret is required. The workflow uses GitHub's provided
+token. Merging a PR or pushing a tag does not trigger publication. Release-workflow PRs exercise
+the dry-run path automatically, using `0.1.0` only as a validation example.
+
+Before version 1.0, use a minor increment for incompatible public API changes and a patch increment
+for compatible fixes. From version 1.0, use semantic versioning. This module path supports major
+versions 0 and 1; version 2 requires a `/v2` module path and a separate migration.
+
+If publication fails after creating the tag, keep the tag: consumers may already have downloaded
+it. Re-run the failed workflow jobs on the same commit after resolving the failure. The workflow
+accepts an existing tag only when it points to that exact commit and refuses to replace an existing
+GitHub release. If the code must change, choose a new version. Go proxy propagation can delay the
+published-consumer check; do not delete or move a tag to retry it.
+
+Release evidence records the source commit, contract and Node revisions, toolchain, dependency
+versions, report checksums, and workflow run. These are traceability records, not signed build
+attestations. The tests simulate payment processing and do not certify live settlement.
