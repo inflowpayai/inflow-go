@@ -2,6 +2,9 @@
 
 Go SDK for accepting and making InFlow payments through MPP and x402.
 
+See the shared [SDK compatibility and support policy](https://github.com/inflowpayai/inflow-specs#sdk-compatibility-and-support)
+for supported releases, dependency expectations, and security reporting.
+
 For development checks and reproducible SDK conformance reports, see
 [Shared conformance](conformance/README.md).
 
