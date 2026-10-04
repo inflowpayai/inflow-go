@@ -1,6 +1,9 @@
-# Runnable payment examples
+# Runnable examples
 
-These programs use **InFlow Sandbox**, not a simulated payment platform. Sellers run locally,
+For payment-independent agent recognition, see the [TAP Seller example](tap-seller/).
+It needs a public origin configuration, not an InFlow API key.
+
+The MPP and x402 programs use **InFlow Sandbox**, not a simulated payment platform. Sellers run locally,
 but configuration, approvals, and payment processing use your Sandbox accounts.
 Use Go 1.26 or later and run commands from the repository root.
 
@@ -65,7 +68,7 @@ MPP processes payment **before** the application handler runs. x402 settles a su
 response before releasing it. Neither makes application side effects transactional with payment.
 The demonstration handlers only return content.
 
-`make verify` builds all four programs, tests startup and HTTP behavior against local servers,
+`make verify` builds all five programs, tests startup and HTTP behavior against local servers,
 and runs race detection and coverage checks. Inert keys and scripted platform responses test
 SDK integration, not live settlement. Instrumented executable startup coverage is combined with
 unit coverage so the actual command entry points remain inside the coverage gate.

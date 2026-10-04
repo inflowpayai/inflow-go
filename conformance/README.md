@@ -14,8 +14,8 @@ mkdir /tmp/inflow-go-reports
 node scripts/conformance.mjs --contract-root ../inflow-specs --output-dir /tmp/inflow-go-reports
 ```
 
-The output directory must exist and must not contain `runtime.json`, `mpp.json`, or `x402.json`.
-Existing reports are never overwritten. The command runs all three suites and fails if any case
+The output directory must exist and must not contain `runtime.json`, `mpp.json`, `x402.json`, or `tap.json`.
+Existing reports are never overwritten. The command runs all four suites and fails if any case
 fails; it retains failed reports too. A report is evidence only when `completed` and `passed` are
 both true. Reports include the source commits and dirty states, case hashes, the compiled adapter's
 Go version, and resolved module versions. An unreleased local module is identified as `(devel)`
@@ -25,6 +25,13 @@ To check a different clean contract revision, pass `--contract-revision FULL_COM
 That changes the explicit test input; it does not update the pin or excuse failed cases.
 
 ## What the reports exercise
+
+- **TAP:** real synthetic Ed25519 requests pass through the public verifier and
+  verified callback. Cases cover canonical signature parameters, signed request
+  tampering, body digests, time boundaries, concurrent nonce claims, resolver/store
+  failures, and the built-in key cache using the runner's real loopback key server.
+  Accepted and rejected requests are checked for input mutation. The adapter neither
+  parses signatures nor implements its own verifier or HTTP key cache.
 
 - **Runtime:** the four public Buyer/Seller clients select environments and preserve authentication
   errors, Seller-account rejection messages, correlation identifiers, and credential-header

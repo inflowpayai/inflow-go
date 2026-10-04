@@ -99,10 +99,76 @@ cleanup can fail. Inspect uncertain outcomes before starting another purchase.
 ## Package design
 
 One Go module carries one release version. MPP and x402 each have Core, Buyer, and Seller
-packages, with shared internal HTTP implementation. The client accepts an optional
-`http.RoundTripper`; InFlow controls HTTP redirect and timeout policies. Construction performs no
-network activity. Operations load configuration when needed and permit a later attempt after a
-failed load.
+packages, with shared internal HTTP implementation. Payment clients accept an optional
+`http.RoundTripper`; InFlow controls their HTTP redirect and timeout policies. Construction
+performs no network activity. Operations load configuration when needed and permit a later
+attempt after a failed load.
+
+### TAP Seller verification
+
+Import `github.com/inflowpayai/inflow-go/tap/seller` to verify the InFlow profile of
+Visa Trusted Agent Protocol. This optional package uses the Go standard library;
+it does not import payment clients or require InFlow account credentials.
+Verification recognizes the signing agent. It does not identify the buyer, grant
+account access, authorize a purchase, or prove that a payment settled.
+
+```go
+verifier := seller.New(seller.Options{})
+facts, err := verifier.Verify(ctx, seller.Request{
+    Method: request.Method,
+    URL: publicRequestURL,
+    Headers: request.Header,
+    Body: exactBodyBytes,
+})
+```
+
+`publicRequestURL` is the absolute URL observed by the signer. Build it from trusted
+deployment configuration, not arbitrary forwarding headers. Preserve encoded paths,
+query order, and exact body bytes. Nil `Body` means absent; a non-nil empty slice
+means a supplied empty body and requires signed Content-Digest and Content-Type.
+The verifier does not consume an HTTP body stream or modify the supplied request.
+
+`WithVerified(ctx, request, func(Facts) error)` calls the application only after
+signature verification and the atomic replay claim succeed. It returns verification,
+custom resolver/store, or callback errors to the caller. The application decides
+HTTP status and response formatting. See the [runnable HTTP example](examples/tap-seller/)
+for body limits, public-origin configuration, successful recognition, and rejection.
+
+The profile accepts one `sig2` Ed25519 signature covering method, authority, path,
+and query, plus digest and content type when a body is supplied. It accepts both
+`ed25519` and `Ed25519` spellings. Repeated signature parameters use their last value,
+in their first position, for both validation and canonical signature reconstruction.
+This is not permission to collapse ambiguous repeated HTTP fields or covered components.
+
+Validity is checked when verification starts, with a maximum eight-minute signed
+interval. Key retrieval completing after expiration does not cause a second time
+check. Cryptographic success precedes replay storage. The default
+`MemoryReplayStore` retains key/nonce claims until signature expiry in one process.
+Reuse the verifier, and supply a shared atomic `ReplayStore` for multiple processes.
+This is not payment idempotency or permanent nonce storage.
+
+`NewVisaKeyResolver` uses Visa's trusted key service, a one-hour fresh cache, a
+24-hour outage-fallback window, and a three-second retrieval deadline. Configure
+`KeyResolverOptions` to supply a trusted URL, transport, clock, or durations; zero
+durations select defaults. A request's key identifier never chooses the URL.
+Successful refresh replaces the key set atomically. Unknown keys fail; a failed
+refresh can use a matching previously trusted key within the outage window.
+Key-set responses are limited to 8 MiB. Returned public-key bytes are independent
+copies, so modifying them does not change cached trust.
+
+Concurrent refreshes share one request. As with the Go payment clients' shared
+configuration loads, the caller starting it owns its context; cancellation can fail
+that refresh for other callers. A waiting caller can cancel without cancelling the
+refresh. A later call can retry. Node does not expose this Go context boundary.
+Custom resolvers and stores must honor cancellation and support concurrent use.
+
+Inspect `*seller.Error.Code` for `SIGNATURE_INPUT_INVALID`, `CONTENT_DIGEST_INVALID`,
+`SIGNATURE_LIFETIME_INVALID`, `SIGNATURE_NOT_YET_VALID`, `SIGNATURE_EXPIRED`,
+`KEY_NOT_FOUND`, `KEY_RETRIEVAL_FAILED`, `SIGNATURE_INVALID`, or `NONCE_REPLAYED`.
+Context cancellation and custom implementation errors retain their original identity.
+Returned facts include the key identifier, normalized algorithm, intent, nonce,
+timestamps, and signed component order. Keep any required investigation records
+under your application's data-retention policy.
 
 ### x402 Core
 
