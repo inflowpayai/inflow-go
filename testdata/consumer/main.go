@@ -10,6 +10,7 @@ import (
 	"github.com/inflowpayai/inflow-go/mpp"
 	"github.com/inflowpayai/inflow-go/mpp/buyer"
 	"github.com/inflowpayai/inflow-go/mpp/seller"
+	tap "github.com/inflowpayai/inflow-go/tap/seller"
 	"github.com/inflowpayai/inflow-go/x402"
 	x402buyer "github.com/inflowpayai/inflow-go/x402/buyer"
 	x402seller "github.com/inflowpayai/inflow-go/x402/seller"
@@ -59,6 +60,9 @@ func main() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	if _, err := tap.New(tap.Options{}).Verify(ctx, tap.Request{}); !errors.Is(err, context.Canceled) {
+		panic("TAP cancellation contract failed")
+	}
 	x402Client, err := x402buyer.New(x402buyer.Options{Options: options, External: foundation.Newx402Client()})
 	if err != nil {
 		panic(err)

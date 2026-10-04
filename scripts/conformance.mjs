@@ -78,7 +78,7 @@ async function main() {
     const { run } = await import(
       pathToFileURL(join(contractRoot, "runner/run.mjs"))
     );
-    for (const suite of ["runtime", "mpp", "x402"]) {
+    for (const suite of ["runtime", "mpp", "x402", "tap"]) {
       if (controller.signal.aborted) throw new Error("Conformance interrupted");
       const fixtures = await import(
         pathToFileURL(join(contractRoot, `fixtures/${suite}.mjs`))
@@ -99,8 +99,10 @@ async function main() {
             suites:
               suite === "runtime"
                 ? ["runtime"]
-                : [`${suite}-core`, `${suite}-buyer`, `${suite}-seller`],
-            supported_features: [],
+                : suite === "tap"
+                  ? ["tap-seller"]
+                  : [`${suite}-core`, `${suite}-buyer`, `${suite}-seller`],
+            supported_features: suite === "mpp" ? ["mpp-seller-subscriptions"] : [],
             unsupported_features: [],
           },
           implementation,

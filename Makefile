@@ -12,6 +12,7 @@ docs:
 	go doc ./x402/buyer
 	go doc ./x402/buyer/eip7702
 	go doc ./x402/seller
+	go doc ./tap/seller
 
 format:
 	gofmt -w .

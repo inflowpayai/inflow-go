@@ -96,6 +96,8 @@ func execute(ctx context.Context, r request) (any, error) {
 		return nil, errors.New("unsupported adapter version")
 	}
 	switch {
+	case strings.HasPrefix(r.Operation, "tap."):
+		return executeTAP(ctx, r.Operation, r.Input)
 	case strings.HasPrefix(r.Operation, "mpp."):
 		return executeMPP(ctx, r.Operation, r.Input)
 	case strings.HasPrefix(r.Operation, "x402."):
