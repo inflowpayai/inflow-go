@@ -50,6 +50,12 @@ func (c *Client) Do(request *http.Request, options PaymentOptions) (*http.Respon
 	}
 	var selected *mpp.Challenge
 	for _, challenge := range challenges {
+		if challenge.Method == mpp.MethodCard {
+			// Match Node's CARD canHandleChallenge predicate before selecting an offer.
+			if _, err := mpp.DecodeCardRequest(challenge.Request); err != nil {
+				continue
+			}
+		}
 		err := validate(challenge, options)
 		var paymentError *Error
 		if errors.As(err, &paymentError) && paymentError.Code == Unsupported {

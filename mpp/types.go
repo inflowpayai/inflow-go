@@ -8,6 +8,8 @@ import (
 const (
 	MethodInflow       = "inflow"
 	MethodTempo        = "tempo"
+	MethodStripe       = "stripe"
+	MethodCard         = "card"
 	IntentCharge       = "charge"
 	IntentSubscription = "subscription"
 )

@@ -17,17 +17,18 @@ import (
 // MPP handle alive just to cancel it.
 // This is an MPP client lifecycle choice, not a rule for the resumable x402 client.
 type Payment struct {
-	client     *Client
-	parent     context.Context
-	ctx        context.Context
-	cancel     context.CancelCauseFunc
-	release    context.CancelFunc
-	initial    transaction
-	once       sync.Once
-	done       chan struct{}
-	credential string
-	err        error
-	cleanupErr error
+	client                *Client
+	parent                context.Context
+	ctx                   context.Context
+	cancel                context.CancelCauseFunc
+	release               context.CancelFunc
+	initial               transaction
+	expectedCardChallenge string
+	once                  sync.Once
+	done                  chan struct{}
+	credential            string
+	err                   error
+	cleanupErr            error
 }
 
 func (p *Payment) TransactionID() string { return p.initial.TransactionID }
@@ -112,14 +113,25 @@ func (p *Payment) run() {
 		}
 		switch current.State {
 		case "ready":
-			if _, err := mpp.DecodeCredential(current.Credential); err != nil {
+			credential, err := mpp.DecodeCredential(current.Credential)
+			if err == nil && p.expectedCardChallenge != "" {
+				// A ready CARD credential is not settlement. Check its complete challenge
+				// before forwarding the opaque payload to the Seller; never replace it.
+				actual, _ := mpp.Encode(credential.Challenge)
+				if actual != p.expectedCardChallenge {
+					err = &Error{Code: InvalidCredential}
+				} else {
+					err = mpp.ValidateCardPayload(credential.Payload)
+				}
+			}
+			if err != nil {
 				p.err = &Error{Code: InvalidCredential, Cause: err}
 			} else {
 				p.credential = current.Credential
 			}
 			return
 		case "failed":
-			p.err = &Error{Code: Failed, Problem: current.Problem}
+			p.err = &Error{Code: Failed, Problem: current.Problem, TransactionID: current.TransactionID}
 			return
 		case "expired":
 			p.err = &Error{Code: Expired, TransactionID: transactionID}

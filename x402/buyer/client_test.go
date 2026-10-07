@@ -15,6 +15,18 @@ import (
 	"github.com/inflowpayai/inflow-go/x402"
 )
 
+func TestPaymentStatusUsesCallerContext(t *testing.T) {
+	c, err := New(Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err = c.PaymentStatus(ctx, "original", inflow.PaymentStatusOptions{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("status cancellation: %v", err)
+	}
+}
+
 func TestConfiguration(t *testing.T) {
 	for _, options := range []Options{{PollInterval: -1}, {WaitTimeout: -1}, {Options: inflow.Options{BaseURL: "invalid"}}, {Policies: []Policy{nil}}} {
 		if _, err := New(options); err == nil {

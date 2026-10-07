@@ -99,6 +99,37 @@ another wait. Receiving a payload does not itself prove the seller accepted or s
 Neither protocol's cancellation operation reverses a completed payment, and best-effort approval
 cleanup can fail. Inspect uncertain outcomes before starting another purchase.
 
+### Checking payment status
+
+Both MPP and x402 Buyer clients expose `PaymentStatus` for a transaction you already created.
+Use its original identifier after an uncertain result or when the buyer needs to authenticate a
+card. This read is separate from waiting for an MPP credential or an x402 payload: receiving
+either does not prove the payment settled.
+
+```go
+status, err := client.PaymentStatus(ctx, transactionID, inflow.PaymentStatusOptions{})
+if err != nil {
+    return err
+}
+if status.NextAction != nil && status.NextAction.Type == "authenticate_card" {
+    // Present this dashboard URL to the buyer without attaching API credentials.
+    fmt.Println("Authenticate your card:", status.NextAction.URL)
+}
+fmt.Println("Payment status:", status.Status)
+```
+
+`client` can be either Buyer client; `transactionID` is retained from the original payment.
+Each call fetches a fresh snapshot. The SDK returns unfamiliar status and action names unchanged,
+does not open action URLs, and does not create, confirm or cancel a payment. Canceling the context
+only stops the read. After the buyer finishes authentication, explicitly read the same transaction
+again. The absence of `NextAction` does not establish settlement.
+
+There is one HTTP attempt by default. `PaymentStatusOptions{Retries: 1}` allows one retry of the
+read; retries are capped at three. Redirects are errors rather than instructions to forward your
+credentials. A failed read, including a 404, does not establish whether a prior payment completed
+and is not permission to create a replacement purchase. A returned `GENERAL_ERROR` is a successful
+status read describing a failed transaction, not an HTTP request failure.
+
 ## Package design
 
 One Go module carries one release version. MPP and x402 each have Core, Buyer, and Seller
@@ -234,6 +265,13 @@ managed `exact`. Set `Prefer` to change that order. Policies filter candidates b
 When several balance assets match, a fresh account balance lookup can select an affordable asset;
 an unavailable balance lookup falls back to the first match. InFlow remains the authority on
 available funds. Managed signing does not support Permit2.
+
+For instrument payments, set `buyer.Options.InstrumentID` to an owned card's identifier.
+Leave it empty to use the account's primary card. A rejected selection fails without trying a
+different card. This option has no effect on balance or blockchain payments. The selection belongs
+to the client, as in the Node SDK; create separate clients when callers need different cards.
+For automatic selection through `Sign` or `Do`, include `"instrument"` in `Prefer`.
+Setting `InstrumentID` alone does not enable that scheme.
 
 Set `External` to a configured upstream client for requirements that do not match managed
 capabilities. Its registered schemes and spending limits remain in effect. A policy rejection
@@ -402,9 +440,13 @@ an existing middleware instance: rebuild its offers and registrations when adopt
 `Accepts` constructs payment offers without sponsorship declarations. `Route` also checks
 sponsorship eligibility. `PriceSpec.Amount` accepts `$0.01`, `0.01 USDC`, or `0.01` with an
 explicit `Currency`. `Currency` overrides a currency in the amount string. `USD` selects all
-configured stablecoins. Amounts allow at most eight decimal places; conversion to atomic units
-rejects nonzero precision loss. `Schemes` and `Networks` filters intersect; nil means unrestricted,
-while an empty slice selects nothing. The default payment lifetime is 300 seconds.
+configured stablecoins for balance and blockchain offers. Instrument offers require explicit
+`Schemes: []string{"instrument"}` and a USD price. They accept USD 0.50–92233720368547758.07
+in whole cents; their wire amount retains the scale advertised by the Seller configuration.
+They do not expand USD into stablecoin offers. Amounts allow at most eight decimal places;
+conversion rejects nonzero precision loss. `Schemes` and `Networks` filters intersect; nil permits
+the default schemes (not instrument or metered `upto`), while an empty slice selects nothing.
+The default payment lifetime is 300 seconds.
 
 #### Metered payments
 
@@ -555,7 +597,8 @@ credential, err := client.Fulfil(ctx, challenge, buyer.PaymentOptions{})
 
 Import `github.com/inflowpayai/inflow-go/mpp/buyer` alongside the root `inflow` package.
 The challenge comes from `mpp.ParseChallenges`. Keep its encoded request and opaque fields intact.
-For an InFlow instrument charge, supply `PaymentOptions.InstrumentID`. For access under an existing
+For an InFlow instrument charge, `PaymentOptions.InstrumentID` selects an owned card; leave it empty
+to use the primary card. A rejected selection fails without choosing another card. For access under an existing
 InFlow subscription, supply `PaymentOptions.SubscriptionID`; that calls subscription authorization
 instead of creating another purchase. Tempo requires no per-call selector.
 
@@ -672,6 +715,9 @@ requesting platform validation or broadcast. It then sets `Payment-Receipt` and 
 application handler. Payment happens **before** the handler: a handler failure does not reverse it.
 The response is not buffered, so the handler can stream normally after payment succeeds.
 
+Instrument receipts must identify the `inflow` method and the original challenge. A mismatched
+receipt prevents the paid handler from running; it does not reverse a payment or authorize a retry.
+
 Paid responses include `Cache-Control: private` so shared caches must not reuse them for other
 users. `Protect` preserves your handler's other cache directives and adds `private` when necessary.
 This does not prohibit browser-local caching; set `Cache-Control: no-store` in your handler when
@@ -703,6 +749,82 @@ only when configuration advertises idempotency keys, and reuse one key throughou
 Pass a stable key to `Broadcast` when explicitly retrying an uncertain outcome; an empty key
 generates a fresh one. Without advertised idempotency support, broadcast makes one attempt.
 Never retry the entire protected application request solely because its response was lost.
+
+### Accepting Stripe Shared Payment Tokens
+
+Use `seller.Offer{Stripe: &seller.StripeOffer{Amount: "1.25"}}` with the same `Prepare`
+and `Protect` APIs. `Amount` is a decimal USD string: the SDK converts `"1.25"` to
+`"125"` cents without rounding. Supported prices range from USD 0.50 to 999999.99.
+
+Your InFlow Seller account must have Stripe connected and advertise Stripe charge support.
+The authenticated Seller configuration supplies the business profile and accepted payment methods
+(such as card and Link). The application does not supply a Stripe secret key or override those
+settings. See the [runnable Stripe example](examples/mpp-seller/README.md#stripe-shared-payment-tokens).
+
+An external Buyer supplies a Shared Payment Token. The InFlow Go Buyer does not create these
+tokens; this is Seller acceptance, not Buyer token creation or subscription support. A payer need
+not have an InFlow identity. The SDK preserves a supplied source and sends an empty source when
+it is omitted, as required by the InFlow API.
+
+`ExternalID` is optional; use a pointer to distinguish an omitted reference from an empty one.
+When supplied by the Seller, the credential must repeat it exactly. `Metadata` allows up to
+45 string entries, with nonblank keys of at most 40 characters and values of at most 500.
+Keys cannot contain brackets or use the reserved names `externalId`, `inflowMppTransactionId`,
+`mppChallengeId`, `mppIntent`, `mppMethod`, or `stripeNetworkProfile`. `Description` and `Recipient`
+are optional request fields; they do not replace the configured Stripe business profile.
+
+`Protect` checks the signed challenge and route terms before forwarding the token to InFlow.
+Validation does not consume the payment; broadcast performs processing. Only a successful receipt
+for the same Stripe challenge releases the handler. Pending processing and rejected or mismatched
+receipts remain failures. The SDK neither decrypts tokens nor calls Stripe directly.
+
+The released `mpp-go v0.2.0` has no Stripe method package. InFlow Go supplies this method through
+its existing Seller integration; it does not depend on an upstream Stripe implementation or add
+a Stripe library. General MPP transport and lifecycle differences are listed below.
+
+### Visa CARD payments
+
+CARD is a one-time USD payment using an encrypted Visa credential. It is not a Stripe Shared
+Payment Token, nor the `inflow` instrument rail. The Seller accepts it with:
+
+```go
+offer := seller.Offer{Card: &seller.CardOffer{Amount: "1.25"}}
+```
+
+Pass this offer to `Prepare` or `Protect`. The price is decimal USD, from 0.50 to 999999.99;
+the wire challenge contains integer cents. Authenticated Seller configuration must advertise
+CARD and supplies the merchant, recipient, accepted networks and public encryption key. Route
+options cannot replace these settings. `Description`, `ExternalID` and `BillingRequired` are
+optional pointers; an empty reference and an explicit false billing requirement are preserved.
+
+The Buyer supplies the purchase merchant and optionally a linked card:
+
+```go
+response, err := client.Do(request, buyer.PaymentOptions{
+    Merchant: &buyer.CardMerchant{
+        Name: "Example Store", URL: "https://store.example", CountryCode: "US",
+    },
+    InstrumentID: linkedCardID,
+})
+```
+
+Supplying `Merchant` selects CARD offers rather than falling back to another payment method.
+Omit `InstrumentID` to use the account's primary instrument. InFlow checks ownership, Visa
+eligibility and a valid USD allowance; the SDK does not select another card when those checks fail.
+The merchant context does not override the signed challenge or registered merchant details.
+`Prepare` and `Fulfil` accept the same options. CARD does not support subscription authorization.
+
+The Buyer obtains an encrypted credential through the ordinary approval and polling flow, checks
+the complete returned challenge, and forwards the credential unchanged. Readiness is not settlement.
+The Seller checks its signed route terms, validates through InFlow, then broadcasts; only a successful
+CARD receipt for that challenge permits delivery. Neither side decrypts the payload. Optional billing
+fields, extensions and source are preserved. An omitted source becomes an empty string only in the
+Seller's platform request, so an external payer does not need an InFlow identity.
+
+See the [CARD Seller example](examples/mpp-seller/README.md#visa-card) and
+[CARD Buyer example](examples/mpp-buyer/README.md#visa-card). Released `mpp-go v0.2.0` has no CARD
+method package; InFlow Go implements this method in its existing MPP clients, without adding a
+card-processing dependency. Server-side credential verification and settlement remain authoritative.
 
 ### Upstream compatibility notes
 

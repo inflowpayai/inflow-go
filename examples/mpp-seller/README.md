@@ -53,3 +53,41 @@ This example has no application authentication. Place application authentication
 using a separate API-key header or cookie where MPP needs Authorization. See the
 [SDK integration guide](../../README.md#accepting-payments) for instruments, alternative offers,
 Tempo, and separate validation/broadcast calls.
+
+## Stripe Shared Payment Tokens
+
+To offer a one-time USD 1.25 Stripe payment instead of the USDC routes:
+
+```sh
+export MPP_PAYMENT_METHOD=stripe
+go run ./examples/mpp-seller
+```
+
+Keep the Seller API key and signing key from the setup above. Connect Stripe to that Seller
+account in the InFlow dashboard first. Startup fails if the account does not advertise Stripe
+charge support. The example reads its Stripe profile and allowed payment methods from InFlow;
+do not supply a Stripe secret key to this application.
+
+`GET /api/widgets` advertises a `stripe/charge` challenge containing 125 cents. `/free` stays free;
+there is no subscription route in this mode. An external Stripe-capable Buyer must obtain a Shared
+Payment Token and submit its Payment credential. The Go MPP Buyer example cannot create that token.
+The Seller forwards it to InFlow for validation and processing before delivering the resource.
+
+Use `MPP_PAYMENT_METHOD=inflow` or unset it to run the USDC examples. No mode performs a
+payment merely by starting the server or inspecting an unpaid challenge.
+
+## Visa CARD
+
+To accept an encrypted Visa credential for a one-time USD 1.25 purchase:
+
+```sh
+export MPP_PAYMENT_METHOD=card
+go run ./examples/mpp-seller
+```
+
+Keep the Seller API key and signing key from the setup above. The Seller account must advertise
+CARD charge support with merchant settings and a public encryption key. Startup rejects an
+unavailable configuration. `/api/widgets` advertises 125 cents, `/free` stays free, and no subscription
+route is registered. Run the [CARD Buyer](../mpp-buyer/README.md#visa-card) with a separate eligible
+Buyer account. The Seller forwards the encrypted credential to InFlow for validation and processing;
+it does not need a decryption key or direct Visa integration.

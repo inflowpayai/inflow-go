@@ -31,6 +31,25 @@ A free request needs no payment:
 TARGET_URL='http://127.0.0.1:3000/free' go run ./examples/mpp-buyer
 ```
 
+## Visa CARD
+
+Start the Seller in [CARD mode](../mpp-seller/README.md#visa-card), then use the Buyer account's
+linked Visa card with an enabled USD allowance for the purchase. Set the actual merchant details:
+
+```sh
+export MPP_PAYMENT_METHOD=card
+export MERCHANT_NAME='Your merchant name'
+export MERCHANT_URL='https://your-merchant.example'
+export MERCHANT_COUNTRY_CODE='US'
+go run ./examples/mpp-buyer
+```
+
+This makes a payment; it does not merely inspect the challenge. InFlow uses the primary instrument
+unless you set `INSTRUMENT_ID` to a linked card's UUID. The server checks eligibility and allowance.
+The example does not provision a card, create an allowance, or decrypt the returned credential.
+CARD mode selects CARD offers; it does not fall back to a different payment method.
+Do not set `SUBSCRIPTION_ID` for CARD. Unset `MPP_PAYMENT_METHOD` for the ordinary USDC example.
+
 ## Subscriptions
 
 `/api/subscribe` offers a **recurring** 1.00 USDC monthly subscription, expiring one year after

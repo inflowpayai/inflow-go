@@ -7,7 +7,9 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"strings"
 	"time"
+	"unicode/utf16"
 
 	inflow "github.com/inflowpayai/inflow-go"
 	"github.com/inflowpayai/inflow-go/internal/platform"
@@ -23,9 +25,18 @@ type Options struct {
 }
 
 type PaymentOptions struct {
-	InstrumentID string `json:"instrumentId,omitempty"`
+	InstrumentID string        `json:"instrumentId,omitempty"`
+	Merchant     *CardMerchant `json:"merchant,omitempty"`
 	// SubscriptionID selects authorization of an existing subscription, not purchase.
 	SubscriptionID string `json:"-"`
+}
+
+// CardMerchant describes the purchase merchant, not the Buyer account.
+// InFlow remains authoritative for registered merchant details and card allowances.
+type CardMerchant struct {
+	Name        string `json:"name"`
+	URL         string `json:"url"`
+	CountryCode string `json:"countryCode"`
 }
 
 type Client struct {
@@ -57,6 +68,12 @@ func New(options Options) (*Client, error) {
 	return &Client{api: api, resource: resource, pollInterval: options.PollInterval, waitTimeout: options.WaitTimeout}, nil
 }
 
+// PaymentStatus reads an existing payment without creating or cancelling one.
+// It neither follows a next-action URL nor treats credential readiness as settlement.
+func (c *Client) PaymentStatus(ctx context.Context, transactionID string, options inflow.PaymentStatusOptions) (inflow.PaymentStatus, error) {
+	return c.api.PaymentStatus(ctx, transactionID, options)
+}
+
 // Fulfil creates or authorizes a payment and waits for its credential.
 func (c *Client) Fulfil(ctx context.Context, challenge mpp.Challenge, options PaymentOptions) (mpp.Credential, error) {
 	payment, err := c.Prepare(ctx, challenge, options)
@@ -71,6 +88,14 @@ func (c *Client) Fulfil(ctx context.Context, challenge mpp.Challenge, options Pa
 func (c *Client) Prepare(ctx context.Context, challenge mpp.Challenge, options PaymentOptions) (*Payment, error) {
 	if err := validate(challenge, options); err != nil {
 		return nil, err
+	}
+	var expectedCardChallenge string
+	if challenge.Method == mpp.MethodCard {
+		var err error
+		expectedCardChallenge, err = mpp.Encode(challenge)
+		if err != nil {
+			return nil, err
+		}
 	}
 	path := "/v1/transactions/mpp"
 	var body any = struct {
@@ -105,7 +130,7 @@ func (c *Client) Prepare(ctx context.Context, challenge mpp.Challenge, options P
 	}
 	budget, release := context.WithTimeoutCause(ctx, c.waitTimeout, pendingTimeout)
 	waitCtx, cancel := context.WithCancelCause(budget)
-	return &Payment{client: c, parent: ctx, ctx: waitCtx, cancel: cancel, release: release, initial: response, done: make(chan struct{})}, nil
+	return &Payment{client: c, parent: ctx, ctx: waitCtx, cancel: cancel, release: release, initial: response, expectedCardChallenge: expectedCardChallenge, done: make(chan struct{})}, nil
 }
 
 var pendingTimeout = errors.New("MPP pending budget expired")
@@ -114,12 +139,37 @@ func validate(challenge mpp.Challenge, options PaymentOptions) error {
 	if _, err := mpp.RenderChallenge(challenge); err != nil {
 		return err
 	}
-	if challenge.Method != mpp.MethodInflow && challenge.Method != mpp.MethodTempo ||
+	if challenge.Method != mpp.MethodInflow && challenge.Method != mpp.MethodTempo && challenge.Method != mpp.MethodCard ||
 		challenge.Intent != mpp.IntentCharge && challenge.Intent != mpp.IntentSubscription ||
-		challenge.Method == mpp.MethodTempo && challenge.Intent != mpp.IntentCharge {
+		challenge.Method != mpp.MethodInflow && challenge.Intent != mpp.IntentCharge {
 		return &Error{Code: Unsupported}
 	}
-	if options.InstrumentID != "" && (challenge.Method != mpp.MethodInflow || challenge.Intent != mpp.IntentCharge) ||
+	if options.Merchant != nil && challenge.Method != mpp.MethodCard {
+		return &Error{Code: Unsupported}
+	}
+	if challenge.Method == mpp.MethodCard {
+		if _, err := mpp.DecodeCardRequest(challenge.Request); err != nil {
+			return err
+		}
+		merchant := options.Merchant
+		length := func(s string) int { return len(utf16.Encode([]rune(s))) }
+		if merchant == nil || strings.TrimSpace(merchant.Name) == "" || length(merchant.Name) > 200 || length(merchant.URL) > 2048 || len(merchant.CountryCode) != 2 {
+			return &Error{Code: InvalidInput}
+		}
+		parsed, err := url.Parse(merchant.URL)
+		if err != nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+			return &Error{Code: InvalidInput}
+		}
+		for _, letter := range merchant.CountryCode {
+			if !(letter >= 'A' && letter <= 'Z' || letter >= 'a' && letter <= 'z') {
+				return &Error{Code: InvalidInput}
+			}
+		}
+		if options.InstrumentID != "" && !uuid(options.InstrumentID) || options.SubscriptionID != "" {
+			return &Error{Code: InvalidInput}
+		}
+	}
+	if options.InstrumentID != "" && (challenge.Method != mpp.MethodInflow && challenge.Method != mpp.MethodCard || challenge.Intent != mpp.IntentCharge) ||
 		options.SubscriptionID != "" && (challenge.Method != mpp.MethodInflow || challenge.Intent != mpp.IntentSubscription) {
 		return errors.New("MPP payment options do not match the challenge method and intent")
 	}
@@ -166,6 +216,7 @@ const (
 	InvalidCredential ErrorCode = "invalid-credential"
 	InvalidResponse   ErrorCode = "invalid-response"
 	Unsupported       ErrorCode = "unsupported-capability"
+	InvalidInput      ErrorCode = "invalid-input"
 )
 
 type Error struct {

@@ -14,8 +14,9 @@ mkdir /tmp/inflow-go-reports
 node scripts/conformance.mjs --contract-root ../inflow-specs --output-dir /tmp/inflow-go-reports
 ```
 
-The output directory must exist and must not contain `runtime.json`, `mpp.json`, `x402.json`, or `tap.json`.
-Existing reports are never overwritten. The command runs all four suites and fails if any case
+The output directory must exist and must not contain `runtime.json`, `mpp.json`, `x402.json`,
+`tap.json`, `payment-status.json`, `stripe.json`, or `card.json`.
+Existing reports are never overwritten. The command runs all seven suites and fails if any case
 fails; it retains failed reports too. A report is evidence only when `completed` and `passed` are
 both true. Reports include the source commits and dirty states, case hashes, the compiled adapter's
 Go version, and resolved module versions. An unreleased local module is identified as `(devel)`
@@ -25,6 +26,22 @@ To check a different clean contract revision, pass `--contract-revision FULL_COM
 That changes the explicit test input; it does not update the pin or excuse failed cases.
 
 ## What the reports exercise
+
+- **CARD:** USD/Visa offer construction, authenticated configuration, opaque credential forwarding,
+  route binding, validation before broadcast, receipt matching and Buyer approval fulfilment.
+  Native HTTP tests cover Buyer authentication isolation, challenge selection and paid retries.
+  Synthetic credentials do not prove encryption, card eligibility or live settlement.
+
+- **Stripe:** Seller configuration, exact USD-to-cents conversion, references, metadata, route
+  binding, validation/broadcast sequencing, receipt matching and idempotent transport retries.
+  Native tests exercise the signed protected route and the runnable example with synthetic tokens.
+  These tests do not create Stripe tokens or prove live Stripe settlement.
+
+- **Payment status:** both Buyer clients read original transactions using API-key or Bearer
+  authentication. Cases cover card-authentication actions, explicit rechecks, status preservation,
+  encoded identifiers, errors, redirects and opt-in retries. No adapter follows action URLs or
+  creates replacement payments. Native tests verify request cancellation and a second redirect
+  origin receiving no credentials.
 
 - **TAP:** real synthetic Ed25519 requests pass through the public verifier and
   verified callback. Cases cover canonical signature parameters, signed request

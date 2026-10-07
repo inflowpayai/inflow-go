@@ -78,7 +78,7 @@ async function main() {
     const { run } = await import(
       pathToFileURL(join(contractRoot, "runner/run.mjs"))
     );
-    for (const suite of ["runtime", "mpp", "x402", "tap"]) {
+    for (const suite of ["runtime", "mpp", "x402", "tap", "payment-status", "stripe", "card"]) {
       if (controller.signal.aborted) throw new Error("Conformance interrupted");
       const fixtures = await import(
         pathToFileURL(join(contractRoot, `fixtures/${suite}.mjs`))
@@ -86,7 +86,9 @@ async function main() {
       const index =
         suite === "runtime"
           ? runtimeCases(fixtures.runtimeScenarios)
-          : fixtures[`${suite}Cases`];
+          : suite === "payment-status"
+            ? fixtures.paymentStatusCases
+            : fixtures[`${suite}Cases`];
       const output = await open(
         join(resolve(values["output-dir"]), `${suite}.json`),
         "wx",
@@ -99,10 +101,17 @@ async function main() {
             suites:
               suite === "runtime"
                 ? ["runtime"]
-                : suite === "tap"
-                  ? ["tap-seller"]
-                  : [`${suite}-core`, `${suite}-buyer`, `${suite}-seller`],
-            supported_features: suite === "mpp" ? ["mpp-seller-subscriptions"] : [],
+                : suite === "payment-status"
+                  ? ["mpp-buyer", "x402-buyer"]
+                  : suite === "stripe"
+                    ? ["mpp-seller"]
+                    : suite === "card"
+                      ? ["mpp-buyer", "mpp-seller"]
+                      : suite === "tap"
+                        ? ["tap-seller"]
+                        : [`${suite}-core`, `${suite}-buyer`, `${suite}-seller`],
+            supported_features:
+              suite === "mpp" ? ["mpp-seller-subscriptions"] : [],
             unsupported_features: [],
           },
           implementation,

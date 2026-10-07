@@ -21,6 +21,7 @@ func executeX402(ctx context.Context, operation string, raw json.RawMessage) (re
 		Value             string
 		Declaration       any
 		PaymentID         string `json:"payment_id"`
+		InstrumentID      string `json:"instrument_id"`
 		Requirement       x402.PaymentRequirements
 		Context           x402.PaymentRequired
 		Timeout           int             `json:"timeout_ms"`
@@ -85,7 +86,7 @@ func executeX402(ctx context.Context, operation string, raw json.RawMessage) (re
 		if input.Interval > 0 {
 			interval = time.Duration(input.Interval) * time.Millisecond
 		}
-		client, err := b.New(b.Options{Options: options, WaitTimeout: timeout, PollInterval: interval})
+		client, err := b.New(b.Options{Options: options, WaitTimeout: timeout, PollInterval: interval, InstrumentID: input.InstrumentID})
 		if err != nil {
 			return nil, err
 		}

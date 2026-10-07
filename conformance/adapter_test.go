@@ -95,6 +95,9 @@ func execute(ctx context.Context, r request) (any, error) {
 	if r.Version != "1" {
 		return nil, errors.New("unsupported adapter version")
 	}
+	if r.Operation == "mpp.buyer.payment-status" || r.Operation == "x402.buyer.payment-status" {
+		return executePaymentStatus(ctx, r.Operation, r.Input)
+	}
 	switch {
 	case strings.HasPrefix(r.Operation, "tap."):
 		return executeTAP(ctx, r.Operation, r.Input)
@@ -111,8 +114,9 @@ func execute(ctx context.Context, r request) (any, error) {
 
 func platformOptions(raw json.RawMessage) (inflow.Options, error) {
 	var input struct {
-		BaseURL string `json:"base_url"`
-		APIKey  string `json:"api_key"`
+		BaseURL     string `json:"base_url"`
+		APIKey      string `json:"api_key"`
+		AccessToken string `json:"access_token"`
 	}
 	if err := decode(raw, &input); err != nil {
 		return inflow.Options{}, err
@@ -121,7 +125,11 @@ func platformOptions(raw json.RawMessage) (inflow.Options, error) {
 	if err != nil || u.Scheme != "http" || u.Hostname() != "127.0.0.1" || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
 		return inflow.Options{}, errors.New("adapter requires a loopback platform URL")
 	}
-	return inflow.Options{BaseURL: input.BaseURL, APIKey: input.APIKey}, nil
+	options := inflow.Options{BaseURL: input.BaseURL, APIKey: input.APIKey}
+	if input.AccessToken != "" {
+		options.AccessToken = func(context.Context) (string, error) { return input.AccessToken, nil }
+	}
+	return options, nil
 }
 
 func classify(err error, r request) failure {
@@ -134,7 +142,7 @@ func classify(err error, r request) failure {
 	var price *xs.PriceError
 	switch {
 	case errors.As(err, &api):
-		if strings.HasPrefix(r.Operation, "x402.") {
+		if strings.HasPrefix(r.Operation, "x402.") || r.Operation == "mpp.buyer.payment-status" {
 			return failure{Code: "api-error", Message: "InFlow API request failed.", Status: api.HTTPStatus, Details: map[string]any{"body": api.Body}}
 		}
 		return failure{Code: api.Code, Message: api.Message, Status: api.HTTPStatus}
@@ -145,8 +153,17 @@ func classify(err error, r request) failure {
 				f.Details = map[string]any{"transaction_id": mp.TransactionID}
 			}
 		}
-		if mp.Code == mb.Failed && len(mp.Problem) > 0 {
-			f.Details = map[string]any{"problem": mp.Problem}
+		if mp.Code == mb.Failed {
+			details := map[string]any{}
+			if len(mp.Problem) > 0 {
+				details["problem"] = mp.Problem
+			}
+			if mp.TransactionID != "" {
+				details["transaction_id"] = mp.TransactionID
+			}
+			if len(details) > 0 {
+				f.Details = details
+			}
 		}
 	case errors.As(err, &codec):
 		f.Code = "invalid-input"
