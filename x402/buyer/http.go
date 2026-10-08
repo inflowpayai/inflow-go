@@ -14,12 +14,20 @@ var ErrBodyNotReplayable = errors.New("x402 payment requires a replayable reques
 
 // Do sends one unpaid request and at most one paid replay. It preserves application
 // authentication and never follows redirects. The caller closes the returned response body.
+// Requests containing a payment credential are sent once without creating a replacement payment.
 func (c *Client) Do(request *http.Request, options SignOptions) (*http.Response, error) {
 	if request == nil {
 		return nil, errors.New("x402 resource request is required")
 	}
+	alreadyPaid := false
+	for name := range request.Header {
+		if strings.EqualFold(name, x402.HeaderPaymentSignature) || strings.EqualFold(name, "X-Payment") {
+			alreadyPaid = true
+			break
+		}
+	}
 	response, err := c.resource.Do(singleAttempt(request.Clone(request.Context())))
-	if err != nil || response.StatusCode != http.StatusPaymentRequired {
+	if err != nil || response.StatusCode != http.StatusPaymentRequired || alreadyPaid {
 		return response, err
 	}
 	response.Body.Close()

@@ -65,6 +65,63 @@ func TestHTTPReplayIsolation(t *testing.T) {
 	}
 }
 
+func TestHTTPPreservesExistingPayment(t *testing.T) {
+	var platformCalls atomic.Int32
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		platformCalls.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer platform.Close()
+	c := client(t, platform)
+	raw, err := json.Marshal(required())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"Payment-Signature", "payment-signature", "X-Payment", "x-PaYmEnT"} {
+		for _, value := range []string{"original-payment", ""} {
+			t.Run(name+"/"+value, func(t *testing.T) {
+				var requests atomic.Int32
+				merchant := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests.Add(1)
+					values := r.Header.Values(name)
+					if len(values) != 1 || values[0] != value || r.Header.Get("Authorization") != "Bearer application" {
+						t.Error("caller credentials changed")
+					}
+					body, err := io.ReadAll(r.Body)
+					if err != nil || string(body) != "request-body" {
+						t.Errorf("request body: %q, %v", body, err)
+					}
+					w.Header().Set(x402.HeaderPaymentRequired, base64.StdEncoding.EncodeToString(raw))
+					w.WriteHeader(http.StatusPaymentRequired)
+					fmt.Fprint(w, "original rejection")
+				}))
+				defer merchant.Close()
+				request, err := http.NewRequest("POST", merchant.URL, strings.NewReader("request-body"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				request.Header[name] = []string{value}
+				request.Header.Set("Authorization", "Bearer application")
+				response, err := c.Do(request, buyer.SignOptions{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer response.Body.Close()
+				body, err := io.ReadAll(response.Body)
+				if err != nil || string(body) != "original rejection" || response.StatusCode != http.StatusPaymentRequired {
+					t.Fatalf("original response not preserved: %q, %v", body, err)
+				}
+				if requests.Load() != 1 || platformCalls.Load() != 0 {
+					t.Fatal("existing payment triggered automatic payment")
+				}
+				if len(request.Header[name]) != 1 || request.Header[name][0] != value || request.GetBody == nil {
+					t.Fatal("caller request mutated")
+				}
+			})
+		}
+	}
+}
+
 func TestHTTPRejectBeforeSigning(t *testing.T) {
 	platform, creates, _ := server(t, func(w http.ResponseWriter, r *http.Request) { ready(w) })
 	c := client(t, platform)
