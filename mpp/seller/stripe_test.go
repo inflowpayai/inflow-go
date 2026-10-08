@@ -231,7 +231,11 @@ func TestStripeProtectedRoute(t *testing.T) {
 					t.Fatalf("success: %d %v", second.Code, paths)
 				}
 			} else {
-				if served != 0 || second.Header().Get("Payment-Receipt") != "" || second.Code != 402 {
+				status := 402
+				if mode == "pending" {
+					status = 503
+				}
+				if served != 0 || second.Header().Get("Payment-Receipt") != "" || second.Code != status {
 					t.Fatalf("released failed payment: %d %v", second.Code, paths)
 				}
 				want := 1

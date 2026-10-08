@@ -60,7 +60,7 @@ func TestCardPrepare(t *testing.T) {
 }
 
 func TestCardProtectedRoute(t *testing.T) {
-	for _, mode := range []string{"success", "supplied-source", "signature", "expired", "route", "billing", "reference", "payload", "intent", "validation", "pending", "receipt"} {
+	for _, mode := range []string{"success", "supplied-source", "signature", "expired", "route", "billing", "reference", "payload", "intent", "validation", "validation-problem", "pending", "problem-low", "problem-high", "problem-string", "receipt"} {
 		t.Run(mode, func(t *testing.T) {
 			calls, served := 0, 0
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -82,6 +82,10 @@ func TestCardProtectedRoute(t *testing.T) {
 					t.Error("lost challenge description")
 				}
 				if r.URL.Path == "/v1/mpp/validate" {
+					if mode == "validation-problem" {
+						fmt.Fprint(w, `{"success":false,"problem":{"type":"https://paymentauth.org/problems/verification-failed","title":"Rejected","status":403,"detail":"Credential rejected"}}`)
+						return
+					}
 					if mode == "validation" {
 						fmt.Fprint(w, `{"success":false}`)
 						return
@@ -96,7 +100,11 @@ func TestCardProtectedRoute(t *testing.T) {
 					return
 				}
 				if mode == "pending" {
-					fmt.Fprint(w, `{"problem":{"title":"Pending","status":503}}`)
+					fmt.Fprint(w, `{"problem":{"type":"https://paymentauth.org/problems/settlement-unavailable","title":"Pending","status":503,"detail":"Awaiting authentication","extensions":{"reference":"original"}}}`)
+					return
+				}
+				if status, ok := map[string]string{"problem-low": "200", "problem-high": "600", "problem-string": `"503"`}[mode]; ok {
+					fmt.Fprintf(w, `{"problem":{"status":%s}}`, status)
 					return
 				}
 				id := body.Credential.Challenge.ID
@@ -172,14 +180,39 @@ func TestCardProtectedRoute(t *testing.T) {
 					t.Fatal("released invalid payment")
 				}
 				want := 1
-				if mode == "validation" {
+				if mode == "validation" || mode == "validation-problem" {
 					want = 2
 				}
-				if mode == "pending" || mode == "receipt" {
+				if mode == "pending" || mode == "receipt" || mode == "problem-low" || mode == "problem-high" || mode == "problem-string" {
 					want = 3
 				}
 				if calls != want {
 					t.Fatalf("calls %d want %d", calls, want)
+				}
+				status := 402
+				if mode == "pending" {
+					status = 503
+				}
+				if mode == "validation-problem" {
+					status = 403
+				}
+				if response.Code != status {
+					t.Fatalf("status %d want %d", response.Code, status)
+				}
+				if mode == "pending" || mode == "validation-problem" {
+					if response.Header().Get("Content-Type") != "application/problem+json" || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("WWW-Authenticate") != "" {
+						t.Fatal(response.Header())
+					}
+					var problem map[string]any
+					if err := json.Unmarshal(response.Body.Bytes(), &problem); err != nil {
+						t.Fatal(err)
+					}
+					if problem["status"] != float64(status) {
+						t.Fatal(problem)
+					}
+					if mode == "pending" && (problem["detail"] != "Awaiting authentication" || problem["extensions"].(map[string]any)["reference"] != "original") {
+						t.Fatal(problem)
+					}
 				}
 			}
 		})
