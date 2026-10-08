@@ -70,6 +70,11 @@ func main() {
 	if _, err := x402Client.Supported(ctx); !errors.Is(err, context.Canceled) {
 		panic("x402 buyer cancellation contract failed")
 	}
+	for _, read := range []func(context.Context, string, inflow.PaymentStatusOptions) (inflow.PaymentStatus, error){client.PaymentStatus, x402Client.PaymentStatus} {
+		if _, err := read(ctx, "original", inflow.PaymentStatusOptions{}); !errors.Is(err, context.Canceled) {
+			panic("payment status cancellation contract failed")
+		}
+	}
 	_, err = client.Fulfil(ctx, challenge, buyer.PaymentOptions{})
 	var paymentError *buyer.Error
 	if !errors.As(err, &paymentError) || paymentError.Code != buyer.Cancelled || !errors.Is(err, context.Canceled) {
@@ -81,6 +86,24 @@ func main() {
 	}
 	if err := sellerClient.Load(ctx); !errors.Is(err, context.Canceled) {
 		panic("seller cancellation contract failed")
+	}
+	if _, err := sellerClient.Prepare(ctx, seller.Offer{Stripe: &seller.StripeOffer{Amount: "1.25"}}); !errors.Is(err, context.Canceled) {
+		panic("Stripe seller cancellation contract failed")
+	}
+	if _, err := sellerClient.Prepare(ctx, seller.Offer{Card: &seller.CardOffer{Amount: "1.25"}}); !errors.Is(err, context.Canceled) {
+		panic("CARD seller cancellation contract failed")
+	}
+	card := mpp.CardRequest{Amount: "125", Currency: "usd", Recipient: "seller", MethodDetails: mpp.CardMethodDetails{
+		AcceptedNetworks: []string{"visa"}, MerchantName: "Example", EncryptionJWK: mpp.CardEncryptionKey{Kty: "RSA", Alg: "RSA-OAEP-256", Use: "enc", Kid: "test", N: "dGVzdA", E: "AQAB"},
+	}}
+	cardRequest, err := mpp.Encode(card)
+	if err != nil {
+		panic(err)
+	}
+	challenge.Method, challenge.Request = mpp.MethodCard, cardRequest
+	_, err = client.Fulfil(ctx, challenge, buyer.PaymentOptions{Merchant: &buyer.CardMerchant{Name: "Example", URL: "https://example.com", CountryCode: "US"}})
+	if !errors.As(err, &paymentError) || paymentError.Code != buyer.Cancelled {
+		panic("CARD buyer cancellation contract failed")
 	}
 	x402Seller, err := x402seller.New(inflow.Options{Environment: inflow.Sandbox, APIKey: "consumer-test"})
 	if err != nil {

@@ -9,6 +9,7 @@ import (
 
 	inflow "github.com/inflowpayai/inflow-go"
 	"github.com/inflowpayai/inflow-go/internal/platform"
+	"github.com/inflowpayai/inflow-go/mpp"
 )
 
 type Client struct {
@@ -35,8 +36,14 @@ type configuration struct {
 		IdempotencyKeyEnabled bool `json:"idempotencyKeyEnabled"`
 	} `json:"featureFlags"`
 	SupportedMethods []struct {
-		ID            string `json:"id"`
-		MethodDetails struct {
+		ID                  string   `json:"id"`
+		SupportedCurrencies []string `json:"supportedCurrencies"`
+		SupportedIntents    []string `json:"supportedIntents"`
+		MethodDetails       struct {
+			mpp.CardMethodDetails
+			Recipient           string                       `json:"recipient"`
+			NetworkID           string                       `json:"networkId"`
+			PaymentMethodTypes  []string                     `json:"paymentMethodTypes"`
 			CurrencyRails       map[string]rail              `json:"currencyRails"`
 			IntentCurrencyRails map[string]map[string][]rail `json:"intentCurrencyRails"`
 		} `json:"methodDetails"`

@@ -28,7 +28,7 @@ func run(getenv func(string) string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	handler, err := newHandler(ctx, inflow.Options{Environment: inflow.Sandbox, APIKey: key, BaseURL: getenv("INFLOW_BASE_URL")}, secret)
+	handler, err := newHandler(ctx, inflow.Options{Environment: inflow.Sandbox, APIKey: key, BaseURL: getenv("INFLOW_BASE_URL")}, secret, getenv("MPP_PAYMENT_METHOD"))
 	if err != nil {
 		return err
 	}
@@ -41,7 +41,7 @@ func run(getenv func(string) string) error {
 	return server.ListenAndServe()
 }
 
-func newHandler(ctx context.Context, options inflow.Options, secret string) (http.Handler, error) {
+func newHandler(ctx context.Context, options inflow.Options, secret, method string) (http.Handler, error) {
 	client, err := seller.New(options)
 	if err != nil {
 		return nil, err
@@ -59,6 +59,17 @@ func newHandler(ctx context.Context, options inflow.Options, secret string) (htt
 			PeriodUnit:    "month", PeriodCount: 1,
 			SubscriptionExpires: time.Now().UTC().AddDate(1, 0, 0).Format(time.RFC3339),
 		}},
+	}
+	if method == "stripe" {
+		// External Buyers supply Stripe Shared Payment Tokens. InFlow processes them;
+		// this application needs neither a Stripe secret key nor a token-creation endpoint.
+		offers = map[string]seller.Offer{"GET /api/widgets": {Stripe: &seller.StripeOffer{Amount: "1.25"}}}
+	} else if method == "card" {
+		// InFlow supplies merchant settings and the public encryption key. The Seller
+		// forwards encrypted credentials; it does not receive or decrypt card details.
+		offers = map[string]seller.Offer{"GET /api/widgets": {Card: &seller.CardOffer{Amount: "1.25"}}}
+	} else if method != "" && method != "inflow" {
+		return nil, errors.New("MPP_PAYMENT_METHOD must be inflow, stripe, or card")
 	}
 	for path, offer := range offers {
 		// Distinct opaque values prevent a credential for one route being reused on another.

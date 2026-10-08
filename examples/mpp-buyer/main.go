@@ -49,7 +49,12 @@ func run(ctx context.Context, getenv func(string) string, out io.Writer) error {
 	fmt.Fprintln(out, "Requesting resource; approve in InFlow if requested.")
 	// Do handles the 402 challenge, waits for approval when needed, then sends one
 	// paid request. SubscriptionID authorizes an existing subscription instead of buying one.
-	response, err := client.Do(request, buyer.PaymentOptions{SubscriptionID: getenv("SUBSCRIPTION_ID")})
+	options := buyer.PaymentOptions{SubscriptionID: getenv("SUBSCRIPTION_ID"), InstrumentID: getenv("INSTRUMENT_ID")}
+	if getenv("MPP_PAYMENT_METHOD") == "card" {
+		// Merchant context identifies the purchase. InFlow checks the linked card and allowance.
+		options.Merchant = &buyer.CardMerchant{Name: getenv("MERCHANT_NAME"), URL: getenv("MERCHANT_URL"), CountryCode: getenv("MERCHANT_COUNTRY_CODE")}
+	}
+	response, err := client.Do(request, options)
 	if err != nil {
 		return err
 	}

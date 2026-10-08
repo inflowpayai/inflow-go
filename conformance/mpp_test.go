@@ -20,6 +20,7 @@ func executeMPP(ctx context.Context, operation string, raw json.RawMessage) (res
 		Headers   json.RawMessage
 		Challenge mpp.Challenge
 		Context   struct {
+			Merchant       *b.CardMerchant
 			InstrumentID   string
 			SubscriptionID string
 		}
@@ -71,7 +72,7 @@ func executeMPP(ctx context.Context, operation string, raw json.RawMessage) (res
 		if err != nil {
 			return nil, err
 		}
-		paymentOptions := b.PaymentOptions{InstrumentID: input.Context.InstrumentID, SubscriptionID: input.Context.SubscriptionID}
+		paymentOptions := b.PaymentOptions{InstrumentID: input.Context.InstrumentID, SubscriptionID: input.Context.SubscriptionID, Merchant: input.Context.Merchant}
 		if operation == "mpp.buyer.fulfil" {
 			return client.Fulfil(ctx, input.Challenge, paymentOptions)
 		}
@@ -90,6 +91,11 @@ func executeMPP(ctx context.Context, operation string, raw json.RawMessage) (res
 	}
 	switch operation {
 	case "mpp.seller.prepare":
+		if input.Method == mpp.MethodCard {
+			if err := client.Load(ctx); err != nil {
+				return nil, err
+			}
+		}
 		offer, err := mppOffer(input.Method, input.Intent, input.Request)
 		if err != nil {
 			return nil, err
@@ -151,6 +157,12 @@ func mppOffer(method, intent string, raw json.RawMessage) (s.Offer, error) {
 	var offer s.Offer
 	var target any
 	switch {
+	case method == "card" && intent == "charge":
+		offer.Card = &s.CardOffer{}
+		target = offer.Card
+	case method == "stripe" && intent == "charge":
+		offer.Stripe = &s.StripeOffer{}
+		target = offer.Stripe
 	case method == "tempo" && intent == "charge":
 		offer.Tempo = &mpp.TempoRequest{}
 		target = offer.Tempo
@@ -163,5 +175,10 @@ func mppOffer(method, intent string, raw json.RawMessage) (s.Offer, error) {
 	default:
 		return offer, errors.New("unsupported MPP method and intent")
 	}
-	return offer, decode(raw, target)
+	err := decode(raw, target)
+	var fieldType *json.UnmarshalTypeError
+	if errors.As(err, &fieldType) {
+		return offer, &s.Error{Code: "invalid-input"}
+	}
+	return offer, err
 }

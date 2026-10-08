@@ -43,6 +43,9 @@ A second 402 or another non-success response exits with an error instead of payi
 | `TARGET_URL` | Buyers | Resource to request; defaults to the matching local seller's `/api/widgets` |
 | `LISTEN_ADDR` | Sellers | Defaults to loopback port 3000 for MPP or 3001 for x402 |
 | `MPP_SECRET_KEY` | MPP seller | Private challenge-signing key, separate from the API key |
+| `MPP_PAYMENT_METHOD` | MPP seller and buyer | Seller: `inflow` (default), `stripe`, or `card`. Buyer: `card` selects Visa CARD with merchant context |
+| `MERCHANT_NAME`, `MERCHANT_URL`, `MERCHANT_COUNTRY_CODE` | MPP CARD buyer | Purchase merchant name, absolute HTTP(S) URL and two-letter country code |
+| `INSTRUMENT_ID` | MPP buyer | Optional linked instrument UUID; CARD otherwise uses the account's primary instrument |
 | `SUBSCRIPTION_ID` | MPP buyer | Authorize access with an existing subscription instead of purchasing another |
 | `INFLOW_BASE_URL` | All | Optional platform URL override for private deployments or local tests; leave unset for Sandbox |
 

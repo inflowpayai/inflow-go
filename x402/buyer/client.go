@@ -37,6 +37,9 @@ type Policy func(context.Context, []x402.PaymentRequirements) ([]x402.PaymentReq
 
 type Options struct {
 	inflow.Options
+	// InstrumentID selects an owned card for instrument payments only. Empty uses
+	// the primary card; an invalid selection fails without choosing another card.
+	InstrumentID string
 	PollInterval time.Duration
 	// WaitTimeout is a separate budget for each Wait attempt. Zero selects fifteen minutes.
 	WaitTimeout time.Duration
@@ -112,6 +115,12 @@ func New(options Options) (*Client, error) {
 		}
 	}
 	return &Client{api: api, options: options, resource: &http.Client{Transport: options.Transport, Timeout: options.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}, nil
+}
+
+// PaymentStatus reads an existing payment without creating or cancelling one.
+// It neither follows a next-action URL nor treats payload readiness as settlement.
+func (c *Client) PaymentStatus(ctx context.Context, transactionID string, options inflow.PaymentStatusOptions) (inflow.PaymentStatus, error) {
+	return c.api.PaymentStatus(ctx, transactionID, options)
 }
 
 func decode[T any](data []byte) (T, error) {

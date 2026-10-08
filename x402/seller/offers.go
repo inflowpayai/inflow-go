@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"math/big"
 	"regexp"
 	"slices"
 	"strings"
@@ -154,7 +155,22 @@ func buildOffers(config x402.ConfigResponse, options AcceptsOptions, transfer st
 		if !selected(options.Schemes, method.Scheme) || !selected(options.Networks, method.Network) {
 			continue
 		}
-		for _, currency := range currencies {
+		methodCurrencies := currencies
+		if method.Scheme == x402.SchemeInstrument {
+			if !slices.Contains(options.Schemes, x402.SchemeInstrument) || currency != "USD" {
+				continue
+			}
+			cents, err := atomicAmount(integer, fraction, 2, options.Price.Amount)
+			if err != nil {
+				return nil, err
+			}
+			amount, _ := new(big.Int).SetString(cents, 10)
+			if amount.Cmp(big.NewInt(50)) < 0 || !amount.IsInt64() {
+				return nil, &PriceError{Input: options.Price.Amount}
+			}
+			methodCurrencies = []string{"USD"}
+		}
+		for _, currency := range methodCurrencies {
 			amount, err := atomicAmount(integer, fraction, method.Decimals, options.Price.Amount)
 			if err != nil {
 				return nil, err

@@ -157,3 +157,48 @@ func TestPaidRequest(t *testing.T) {
 		t.Fatal(calls.Load(), resources.Load(), out.String())
 	}
 }
+
+func TestCardPayment(t *testing.T) {
+	request, _ := mpp.Encode(mpp.CardRequest{Amount: "125", Currency: "usd", Recipient: "seller", MethodDetails: mpp.CardMethodDetails{
+		AcceptedNetworks: []string{"visa"}, MerchantName: "Example", EncryptionJWK: mpp.CardEncryptionKey{Kty: "RSA", Alg: "RSA-OAEP-256", Use: "enc", Kid: "test", N: "dGVzdA", E: "AQAB"},
+	}})
+	challenge := mpp.Challenge{ID: "test", Realm: "example", Method: "card", Intent: "charge", Request: request}
+	credential, _ := mpp.EncodeCredential(mpp.Credential{Challenge: challenge, Payload: map[string]any{"encryptedPayload": "opaque", "network": "visa", "panLastFour": "1234", "panExpirationMonth": "12", "panExpirationYear": "2030"}})
+	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Options struct {
+				Merchant     struct{ Name, URL, CountryCode string }
+				InstrumentID string
+			}
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		if body.Options.Merchant.Name != "Example" || body.Options.Merchant.URL != "https://example.com" || body.Options.Merchant.CountryCode != "US" || body.Options.InstrumentID != "22222222-2222-4222-8222-222222222222" {
+			t.Error("missing CARD context")
+		}
+		json.NewEncoder(w).Encode(map[string]any{"state": "ready", "credential": credential})
+	}))
+	defer platform.Close()
+	resource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "" {
+			header, _ := mpp.RenderChallenge(challenge)
+			w.Header().Set("WWW-Authenticate", header)
+			w.WriteHeader(402)
+			return
+		}
+		if r.Header.Get("Authorization") != "Payment "+credential {
+			t.Error("changed credential")
+		}
+		fmt.Fprint(w, "card-paid")
+	}))
+	defer resource.Close()
+	env := map[string]string{"INFLOW_API_KEY": "test-only-key", "INFLOW_BASE_URL": platform.URL, "TARGET_URL": resource.URL, "MPP_PAYMENT_METHOD": "card", "MERCHANT_NAME": "Example", "MERCHANT_URL": "https://example.com", "MERCHANT_COUNTRY_CODE": "US", "INSTRUMENT_ID": "22222222-2222-4222-8222-222222222222"}
+	var out bytes.Buffer
+	if err := run(context.Background(), func(k string) string { return env[k] }, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "card-paid") {
+		t.Fatal(out.String())
+	}
+}

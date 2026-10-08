@@ -80,6 +80,9 @@ func (c *Client) prepare(ctx context.Context, required x402.PaymentRequired, opt
 	body["accept"] = required.Accepts[0]
 	body["resource"] = required.Resource
 	body["x402Version"] = 2
+	if required.Accepts[0].Scheme == x402.SchemeInstrument && c.options.InstrumentID != "" {
+		body["instrumentId"] = c.options.InstrumentID
+	}
 	if options.PaymentID != "" {
 		body["remotePaymentId"] = options.PaymentID
 	}

@@ -10,6 +10,8 @@ import (
 
 // Offer selects exactly one typed payment request.
 type Offer struct {
+	Stripe       *StripeOffer
+	Card         *CardOffer
 	Charge       *mpp.ChargeRequest
 	Subscription *mpp.SubscriptionRequest
 	Tempo        *mpp.TempoRequest
@@ -23,13 +25,19 @@ type PreparedOffer struct {
 
 func (c *Client) Prepare(ctx context.Context, offer Offer) (PreparedOffer, error) {
 	count := 0
-	for _, present := range []bool{offer.Charge != nil, offer.Subscription != nil, offer.Tempo != nil} {
+	for _, present := range []bool{offer.Charge != nil, offer.Subscription != nil, offer.Tempo != nil, offer.Stripe != nil, offer.Card != nil} {
 		if present {
 			count++
 		}
 	}
 	if count != 1 {
 		return PreparedOffer{}, errors.New("MPP offer requires exactly one request")
+	}
+	if offer.Stripe != nil {
+		return c.prepareStripe(ctx, *offer.Stripe)
+	}
+	if offer.Card != nil {
+		return c.prepareCard(ctx, *offer.Card)
 	}
 	prepared := PreparedOffer{Method: mpp.MethodInflow, Intent: mpp.IntentCharge}
 	var request any
@@ -152,6 +160,18 @@ func payloadValid(credential mpp.Credential) error {
 			return err
 		}
 		return payload.Validate()
+	}
+	if credential.Challenge.Method == mpp.MethodStripe {
+		return stripeCredentialValid(credential)
+	}
+	if credential.Challenge.Method == mpp.MethodCard {
+		if credential.Challenge.Intent != mpp.IntentCharge {
+			return &Error{Code: "unsupported-capability"}
+		}
+		if err := mpp.ValidateCardPayload(credential.Payload); err != nil {
+			return &Error{Code: "invalid-credential"}
+		}
+		return nil
 	}
 	if credential.Challenge.Method != mpp.MethodInflow {
 		return &Error{Code: "unsupported-capability"}

@@ -37,6 +37,7 @@ func (c *Client) Validate(ctx context.Context, credential mpp.Credential) (Valid
 	if err := c.Load(ctx); err != nil {
 		return Validation{}, err
 	}
+	credential = externalWireCredential(credential)
 	raw, err := c.api.Do(ctx, platform.Request{Method: "POST", Path: "/v1/mpp/validate", Body: credentialBody(credential), Retries: 3})
 	if err != nil {
 		return Validation{}, err
@@ -68,6 +69,16 @@ func (c *Client) Validate(ctx context.Context, credential mpp.Credential) (Valid
 func (c *Client) Broadcast(ctx context.Context, credential mpp.Credential, idempotencyKey string) (mpp.Receipt, error) {
 	if err := payloadValid(credential); err != nil {
 		return mpp.Receipt{}, err
+	}
+	credential = externalWireCredential(credential)
+	requireBoundReceipt := credential.Challenge.Method == mpp.MethodStripe || credential.Challenge.Method == mpp.MethodCard
+	if credential.Challenge.Method == mpp.MethodInflow {
+		request, err := requestObject(credential.Challenge.Request)
+		if err != nil {
+			return mpp.Receipt{}, err
+		}
+		details, _ := request["methodDetails"].(map[string]any)
+		requireBoundReceipt = details["rail"] == "instrument"
 	}
 	config, err := c.config(ctx)
 	if err != nil {
@@ -102,6 +113,11 @@ func (c *Client) Broadcast(ctx context.Context, credential mpp.Credential, idemp
 	}
 	if _, err := mpp.EncodeReceipt(*value.Receipt); err != nil {
 		return mpp.Receipt{}, rejection(value.Problem)
+	}
+	// Instrument settlement must identify the same purchase before releasing the resource.
+	if requireBoundReceipt &&
+		(value.Receipt.Method != credential.Challenge.Method || value.Receipt.ChallengeID == nil || *value.Receipt.ChallengeID != credential.Challenge.ID) {
+		return mpp.Receipt{}, rejection(nil)
 	}
 	return *value.Receipt, nil
 }
