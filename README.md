@@ -480,6 +480,15 @@ the response to charge 123 atomic units of the selected asset. Choose an integer
 zero and the authorized maximum; without an override, settlement uses that maximum. This path
 uses an external blockchain wallet, not InFlow-managed Permit2 signing.
 
+#### Payment response caching
+
+The upstream x402 HTTP middleware owns payment-response cache headers. In x402 Go v2.27.0,
+its helper can mistake `private` inside a quoted extension value such as
+`example="a, private, b"` for a real directive, leaving a receipt response without the intended
+private cache policy. See [upstream issue #3747](https://github.com/x402-foundation/x402/issues/3747).
+Explicitly include an unqualified `private` directive in `Cache-Control` on affected handler
+responses. InFlow does not replace the upstream cache parser.
+
 #### Sponsorship and facilitator access
 
 Set `RouteOptions.AssetTransferMethod` to `"permit2"` to select compatible Permit2 offers.
