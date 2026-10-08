@@ -29,6 +29,7 @@ type settings struct {
 	Role, Protocol, Platform, Target, Variant string
 	HandlerStatus                             int
 	SubscriptionID                            string
+	StatusID, InstrumentID                    string
 }
 
 func TestMain(m *testing.M) {
@@ -61,6 +62,35 @@ func runPeer() error {
 	defer cancel()
 	options := inflow.Options{BaseURL: s.Platform, APIKey: "test-only-" + s.Role + "-key", Timeout: 5 * time.Second}
 	if s.Role == "buyer" {
+		if s.StatusID != "" {
+			var read func() (inflow.PaymentStatus, error)
+			if s.Protocol == "mpp" {
+				client, err := mb.New(mb.Options{Options: options})
+				if err != nil {
+					return err
+				}
+				read = func() (inflow.PaymentStatus, error) {
+					return client.PaymentStatus(ctx, s.StatusID, inflow.PaymentStatusOptions{})
+				}
+			} else {
+				client, err := xb.New(xb.Options{Options: options})
+				if err != nil {
+					return err
+				}
+				read = func() (inflow.PaymentStatus, error) {
+					return client.PaymentStatus(ctx, s.StatusID, inflow.PaymentStatusOptions{})
+				}
+			}
+			var snapshots []inflow.PaymentStatus
+			for range 2 {
+				snapshot, err := read()
+				if err != nil {
+					return err
+				}
+				snapshots = append(snapshots, snapshot)
+			}
+			return json.NewEncoder(os.Stdout).Encode(snapshots)
+		}
 		request, err := http.NewRequestWithContext(ctx, "GET", s.Target, nil)
 		if err != nil {
 			return err
@@ -72,12 +102,20 @@ func runPeer() error {
 			if err != nil {
 				return err
 			}
-			response, err = client.Do(request, mb.PaymentOptions{SubscriptionID: s.SubscriptionID})
+			payment := mb.PaymentOptions{SubscriptionID: s.SubscriptionID, InstrumentID: s.InstrumentID}
+			if s.Variant == "card" {
+				payment.Merchant = &mb.CardMerchant{Name: "Interop shop", URL: "https://shop.example", CountryCode: "US"}
+			}
+			response, err = client.Do(request, payment)
 			if err != nil {
 				return err
 			}
 		} else {
-			client, err := xb.New(xb.Options{Options: options, PollInterval: time.Nanosecond, WaitTimeout: 5 * time.Second})
+			prefer := []string{"balance", "exact"}
+			if s.Variant == "instrument" {
+				prefer = []string{"instrument"}
+			}
+			client, err := xb.New(xb.Options{Options: options, Prefer: prefer, InstrumentID: s.InstrumentID, PollInterval: time.Nanosecond, WaitTimeout: 5 * time.Second})
 			if err != nil {
 				return err
 			}
@@ -135,6 +173,15 @@ func runPeer() error {
 			return err
 		}
 		offer := ms.Offer{Charge: &mpp.ChargeRequest{Amount: "0.01", Currency: "USDC"}}
+		if s.Variant == "instrument" {
+			offer.Charge = &mpp.ChargeRequest{Amount: "1.25", Currency: "USD"}
+		}
+		if s.Variant == "card" {
+			offer = ms.Offer{Card: &ms.CardOffer{Amount: "1.25"}}
+		}
+		if s.Variant == "stripe" {
+			offer = ms.Offer{Stripe: &ms.StripeOffer{Amount: "1.25"}}
+		}
 		if s.Variant == "tempo" {
 			offer = ms.Offer{Tempo: &mpp.TempoRequest{Amount: "10000", Currency: "0x20c0000000000000000000000000000000000000", Recipient: "0x1111111111111111111111111111111111111111"}}
 		}
@@ -159,7 +206,11 @@ func runPeer() error {
 		if err != nil {
 			return err
 		}
-		route, err := client.Route(ctx, xs.RouteOptions{AcceptsOptions: xs.AcceptsOptions{Price: xs.PriceSpec{Amount: "0.01 USDC"}, Schemes: schemes}})
+		price := "0.01 USDC"
+		if s.Variant == "instrument" {
+			price = "1.25 USD"
+		}
+		route, err := client.Route(ctx, xs.RouteOptions{AcceptsOptions: xs.AcceptsOptions{Price: xs.PriceSpec{Amount: price}, Schemes: schemes}})
 		if err != nil {
 			return err
 		}

@@ -67,6 +67,16 @@ func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next
 			}
 			receipt, err := c.Verify(r.Context(), *credential)
 			if err != nil {
+				var failure *Error
+				var problem struct{ Status int }
+				if errors.As(err, &failure) && json.Unmarshal(failure.Problem, &problem) == nil && problem.Status >= 400 && problem.Status <= 599 {
+					// A pending settlement is not a request to buy again; preserve the platform's problem.
+					w.Header().Set("Cache-Control", "no-store")
+					w.Header().Set("Content-Type", "application/problem+json")
+					w.WriteHeader(problem.Status)
+					_, _ = w.Write(failure.Problem)
+					return
+				}
 				break
 			}
 			encoded, _ := mpp.EncodeReceipt(receipt)

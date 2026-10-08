@@ -709,11 +709,18 @@ set `MethodDetails.Rail`; required instrument identifiers must also be provided.
 requests include their recurring terms. Tempo requests specify the token address and recipient;
 their method details default to `feePayer: false` and `supportedModes: ["pull"]`.
 
-`Protect` returns an ordinary `http.Handler`. Without a valid payment it returns a `402` challenge.
+`Protect` returns an ordinary `http.Handler`. Without a payment it returns a `402` challenge.
 It verifies the echoed challenge signature, expiry, realm, opaque data, and configured offer before
 requesting platform validation or broadcast. It then sets `Payment-Receipt` and runs the
 application handler. Payment happens **before** the handler: a handler failure does not reverse it.
 The response is not buffered, so the handler can stream normally after payment succeeds.
+
+If validation or broadcast returns a payment problem with an HTTP error status,
+`Protect` returns that status and Problem Details body with `Cache-Control: no-store`.
+It does not serve paid content, emit a successful receipt, or offer a new purchase.
+For example, pending settlement can return `503`; keep the original transaction and
+credential when checking its status or retrying. Malformed problems and other
+verification errors return a generic `402` challenge without exposing internal errors.
 
 Instrument receipts must identify the `inflow` method and the original challenge. A mismatched
 receipt prevents the paid handler from running; it does not reverse a payment or authorize a retry.
