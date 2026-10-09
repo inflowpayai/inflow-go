@@ -25,7 +25,7 @@ type Facilitator struct {
 var _ foundation.FacilitatorClient = (*Facilitator)(nil)
 
 func NewFacilitator(options inflow.Options) (*Facilitator, error) {
-	if options.APIKey == "" {
+	if options.APIKey == "" && options.APIKeyProvider == nil {
 		return nil, errors.New("authenticated x402 facilitator requires an API key")
 	}
 	return facilitator(options)
@@ -33,7 +33,7 @@ func NewFacilitator(options inflow.Options) (*Facilitator, error) {
 
 // NewAnonymousFacilitator ignores credentials in options and sends anonymous requests.
 func NewAnonymousFacilitator(options inflow.Options) (*Facilitator, error) {
-	options.APIKey, options.AccessToken = "", nil
+	options.APIKey, options.APIKeyProvider, options.AccessToken = "", nil, nil
 	return facilitator(options)
 }
 

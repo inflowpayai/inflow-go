@@ -80,7 +80,7 @@ func TestFacilitatorFailuresAndAnonymous(t *testing.T) {
 		w.Write([]byte(`{"code":"failure"}`))
 	}))
 	defer server.Close()
-	f, err := NewAnonymousFacilitator(inflow.Options{BaseURL: server.URL, APIKey: "secret", AccessToken: func(context.Context) (string, error) { t.Error("token called"); return "secret", nil }})
+	f, err := NewAnonymousFacilitator(inflow.Options{BaseURL: server.URL, APIKey: "secret", APIKeyProvider: func(context.Context) (string, error) { t.Error("provider called"); return "secret", nil }, AccessToken: func(context.Context) (string, error) { t.Error("token called"); return "secret", nil }})
 	if err != nil {
 		t.Fatal(err)
 	}

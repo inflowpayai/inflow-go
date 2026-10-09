@@ -21,7 +21,7 @@ type Client struct {
 
 // New requires a Seller API key. Construction performs no network requests.
 func New(options inflow.Options) (*Client, error) {
-	if options.APIKey == "" {
+	if options.APIKey == "" && options.APIKeyProvider == nil {
 		return nil, errors.New("x402 Seller requires an API key")
 	}
 	api, err := platform.New(options)

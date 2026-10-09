@@ -519,8 +519,10 @@ not prove that an already submitted payment was reversed.
 
 The protocol clients accept `inflow.Options`. Set `Environment: inflow.Sandbox` for testing;
 the default is production. `BaseURL` overrides the environment address for a private deployment
-or local testing. Configure either `APIKey` or an `AccessToken` callback, not both. Omit both for
-anonymous requests to endpoints that permit them. The callback receives the request context,
+or local testing. Configure one of `APIKey`, an `APIKeyProvider` callback, or an `AccessToken`
+callback. Omit all three for anonymous requests to endpoints that permit them.
+`APIKeyProvider` returns the API key to send in `X-API-Key`; its result is not cached.
+The callback receives the request context,
 runs for each attempt, and must support concurrent calls and cancellation. Its errors return
 unchanged to the caller.
 

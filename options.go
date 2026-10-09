@@ -14,11 +14,14 @@ const (
 )
 
 // Options configures an MPP or x402 client. Its zero value selects anonymous
-// requests to production. APIKey and AccessToken are mutually exclusive.
+// requests to production. APIKey, APIKeyProvider, and AccessToken are mutually exclusive.
 type Options struct {
 	Environment Environment
 	BaseURL     string
 	APIKey      string
+	// APIKeyProvider is called for each attempt, including retries. It must honor
+	// cancellation and be safe for concurrent calls. Do not combine authentication options.
+	APIKeyProvider func(context.Context) (string, error)
 	// AccessToken is called for each attempt, including retries. It must honor
 	// cancellation and be safe for concurrent calls. Provider errors are returned unchanged.
 	AccessToken func(context.Context) (string, error)
