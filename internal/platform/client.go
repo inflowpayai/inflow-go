@@ -57,8 +57,8 @@ func New(options inflow.Options) (*Client, error) {
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return nil, errors.New("InFlow base URL must be an HTTP or HTTPS URL without credentials, query, or fragment")
 	}
-	if options.APIKey != "" && options.AccessToken != nil {
-		return nil, errors.New("API key and access token provider are mutually exclusive")
+	if (options.APIKey != "" && (options.AccessToken != nil || options.APIKeyProvider != nil)) || (options.AccessToken != nil && options.APIKeyProvider != nil) {
+		return nil, errors.New("API key, API key provider, and access token provider are mutually exclusive")
 	}
 	if options.APIKey != "" && !validCredential(options.APIKey) {
 		return nil, errors.New("API key must be nonempty and contain no whitespace or control characters")
@@ -129,6 +129,17 @@ func (c *Client) attempt(parent context.Context, input Request, headers http.Hea
 	ctx, cancel := context.WithTimeout(parent, c.options.Timeout)
 	defer cancel()
 	token := ""
+	apiKey := c.options.APIKey
+	if c.options.APIKeyProvider != nil {
+		var err error
+		apiKey, err = c.options.APIKeyProvider(ctx)
+		if err != nil {
+			return nil, false, err
+		}
+		if !validCredential(apiKey) {
+			return nil, false, errors.New("API key provider must return a nonempty value without whitespace or control characters")
+		}
+	}
 	if c.options.AccessToken != nil {
 		var err error
 		token, err = c.options.AccessToken(ctx)
@@ -169,8 +180,8 @@ func (c *Client) attempt(parent context.Context, input Request, headers http.Hea
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if c.options.APIKey != "" {
-		req.Header.Set("X-API-Key", c.options.APIKey)
+	if apiKey != "" {
+		req.Header.Set("X-API-Key", apiKey)
 	} else if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
@@ -194,7 +205,7 @@ func (c *Client) attempt(parent context.Context, input Request, headers http.Hea
 		return &Response{Status: raw.StatusCode, Headers: raw.Header.Clone(), Body: data}, false, nil
 	}
 	retry := raw.StatusCode == 429 || raw.StatusCode == 502 || raw.StatusCode == 503 || raw.StatusCode == 504
-	return nil, retry, responseError(input.Path, raw.StatusCode, raw.Header, data, c.options.APIKey, token)
+	return nil, retry, responseError(input.Path, raw.StatusCode, raw.Header, data, apiKey, token)
 }
 
 func transportError(path string, cause error) *inflow.APIError {
