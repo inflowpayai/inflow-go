@@ -273,11 +273,66 @@ to the client, as in the Node SDK; create separate clients when callers need dif
 For automatic selection through `Sign` or `Do`, include `"instrument"` in `Prefer`.
 Setting `InstrumentID` alone does not enable that scheme.
 
-Set `External` to a configured upstream client for requirements that do not match managed
-capabilities. Its registered schemes and spending limits remain in effect. A policy rejection
-does not bypass the policy by switching to the external path. `SignOptions.PaymentID` and
+Set `External` to a configured upstream client to also pay with a wallet your application
+controls. Your application supplies the signer: the wallet's address and functions that produce
+signatures, using a local private key or a wallet provider. Registering a signing scheme attaches
+it to that upstream client. It does not register a wallet with InFlow, deposit funds, or send
+the private key to InFlow. Applications using only InFlow-managed payments do not need it.
+
+`Sign` first selects an InFlow-managed offer. If none matches, it delegates to `External`.
+Registering an external signer does not force its use, and a failed managed payment does not
+automatically retry with an external wallet. A policy rejection does not bypass the policy by
+switching to the external path. `SignOptions.PaymentID` and
 `TransactionRequestExtensions` apply to managed signing. The returned `EncodedPayload` preserves
 the server's signed encoding; use it directly as `PAYMENT-SIGNATURE`.
+
+#### External-wallet spending controls
+
+The foundation's Go client accepts only tokens recognized by its registered scheme's built-in
+token list by default, and caps each payment in those tokens at $1. Recognition uses the network
+and token contract, not just its name. These are buyer-client controls, not limits on merchant
+prices. They apply to the upstream client supplied as `External`, not to InFlow-managed signing
+or `Prepare`. InFlow does not change that client's configuration.
+
+`AllowedAssets` can permit an unlisted token or configure a recognized token explicitly. This
+example registers your EVM signer for Arc mainnet and permits its USDC without a spending cap:
+
+```go
+import (
+    foundation "github.com/x402-foundation/x402/go/v2"
+    evm "github.com/x402-foundation/x402/go/v2/mechanisms/evm/exact/client"
+)
+
+external := foundation.Newx402Client().
+    Register("eip155:5042", evm.NewExactEvmScheme(signer, nil)).
+    SetSpendControls(foundation.SpendControls{
+        DisableMaxAmountPerPayment: true,
+        AllowedAssets: []foundation.SpendControlAsset{
+            {
+                Network: "eip155:5042",
+                Asset: "0x3600000000000000000000000000000000000000",
+            },
+        },
+    })
+client, err := buyer.New(buyer.Options{
+    Options: inflow.Options{APIKey: apiKey, Environment: inflow.Sandbox},
+    External: external,
+})
+```
+
+Use the `buyer` and `inflow` imports from the managed example above. `signer` is your application's
+upstream EVM signer and `apiKey` is your InFlow API key. The combined client still uses InFlow's
+capability lookup; for external-wallet-only use without an InFlow account, use the foundation
+client directly.
+
+`DisableMaxAmountPerPayment: true` removes the default dollar cap while retaining the token
+restriction. Built-in recognized tokens and the listed Arc contract are accepted. To cap that
+Arc entry, set its `MaxAmountPerPayment` to `"25000000"`: USDC has six decimal places, so this
+is $25. Per-token caps use integer atomic amounts and are optional.
+
+To disable both the token restriction and all foundation spending caps, call
+`external.DisableSpendControls()`. `SetSpendControls` replaces the spending-control configuration;
+neither method registers a signer or adds support for a payment scheme.
 
 #### Waiting for approval
 
