@@ -266,6 +266,12 @@ When several balance assets match, a fresh account balance lookup can select an 
 an unavailable balance lookup falls back to the first match. InFlow remains the authority on
 available funds. Managed signing does not support Permit2.
 
+Circle Gateway offers (`extra.name: "GatewayWalletBatched"`) are excluded from both managed and
+external-wallet selection. When every offer requires Gateway, `Sign` and `Do` return a
+`*buyer.Error` with code `unsupported-capability` explaining that InFlow does not support Circle Gateway.
+`Prepare` rejects a Gateway offer before creating an approval. Other offers in the same response
+remain eligible for selection.
+
 For instrument payments, set `buyer.Options.InstrumentID` to an owned card's identifier.
 Leave it empty to use the account's primary card. A rejected selection fails without trying a
 different card. This option has no effect on balance or blockchain payments. The selection belongs

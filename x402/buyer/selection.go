@@ -144,16 +144,28 @@ func (c *Client) Sign(ctx context.Context, required x402.PaymentRequired, option
 		}
 		return value, nil
 	}
+	candidates := make([]x402.PaymentRequirements, 0, len(required.Accepts))
+	for _, r := range required.Accepts {
+		if !isCircleGateway(r) {
+			candidates = append(candidates, r)
+		}
+	}
+	if len(candidates) == 0 && len(required.Accepts) > 0 {
+		return EncodedPayment{}, &Error{Code: "unsupported-capability", Message: "Circle Gateway payments are not supported by InFlow."}
+	}
 	if c.options.External == nil {
 		return EncodedPayment{}, &Error{Code: "unsupported-capability"}
 	}
-	candidates, err := c.policies(ctx, required.Accepts)
+	candidates, err = c.policies(ctx, candidates)
 	if err != nil {
 		return EncodedPayment{}, err
 	}
 	chosen, err := c.options.External.SelectPaymentRequirements(candidates)
 	if err != nil {
 		return EncodedPayment{}, err
+	}
+	if isCircleGateway(chosen) {
+		return EncodedPayment{}, &Error{Code: "unsupported-capability", Message: "Circle Gateway payments are not supported by InFlow."}
 	}
 	required.Accepts = []x402.PaymentRequirements{chosen}
 	if err = c.before(ctx, required); err != nil {
