@@ -63,12 +63,18 @@ type EncodedPayment struct {
 
 type Error struct {
 	Code       string
+	Message    string
 	Status     string
 	ApprovalID string
 	Cause      error
 }
 
-func (e *Error) Error() string { return "x402 " + e.Code }
+func (e *Error) Error() string {
+	if e.Message != "" {
+		return e.Message
+	}
+	return "x402 " + e.Code
+}
 func (e *Error) Unwrap() error { return e.Cause }
 
 type Client struct {
@@ -189,7 +195,7 @@ func (c *Client) Supported(ctx context.Context) (x402.BuyerSupportedResponse, er
 }
 
 func supports(supported x402.BuyerSupportedResponse, requirement x402.PaymentRequirements) bool {
-	if requirement.Extra["assetTransferMethod"] == "permit2" {
+	if isCircleGateway(requirement) || requirement.Extra["assetTransferMethod"] == "permit2" {
 		return false
 	}
 	for _, kind := range supported.Kinds {
@@ -198,6 +204,10 @@ func supports(supported x402.BuyerSupportedResponse, requirement x402.PaymentReq
 		}
 	}
 	return false
+}
+
+func isCircleGateway(requirement x402.PaymentRequirements) bool {
+	return requirement.Extra["name"] == "GatewayWalletBatched"
 }
 
 func (c *Client) before(ctx context.Context, required x402.PaymentRequired) error {

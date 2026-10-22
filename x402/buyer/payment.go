@@ -61,6 +61,9 @@ func (c *Client) prepare(ctx context.Context, required x402.PaymentRequired, opt
 	if err != nil {
 		return nil, err
 	}
+	if isCircleGateway(required.Accepts[0]) {
+		return nil, &Error{Code: "unsupported-capability", Message: "Circle Gateway payments are not supported by InFlow."}
+	}
 	supported, err := c.Supported(ctx)
 	if err != nil {
 		return nil, err
