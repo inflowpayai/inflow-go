@@ -29,7 +29,7 @@ func run(getenv func(string) string) error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	handler, err := newHandler(ctx, inflow.Options{Environment: inflow.Sandbox, APIKey: key, BaseURL: getenv("INFLOW_BASE_URL")})
+	handler, err := newHandler(ctx, inflow.Options{Environment: inflow.Sandbox, APIKey: key, BaseURL: getenv("INFLOW_BASE_URL")}, foundation.PaymentFlowName(getenv("X402_PAYMENT_FLOW")))
 	if err != nil {
 		return err
 	}
@@ -42,7 +42,7 @@ func run(getenv func(string) string) error {
 	return server.ListenAndServe()
 }
 
-func newHandler(ctx context.Context, options inflow.Options) (http.Handler, error) {
+func newHandler(ctx context.Context, options inflow.Options, flow foundation.PaymentFlowName) (http.Handler, error) {
 	// The client builds offers from Seller configuration. The facilitator delegates
 	// payment verification and settlement to InFlow; it is not a server you must host.
 	client, clientError := seller.New(options)
@@ -57,7 +57,7 @@ func newHandler(ctx context.Context, options inflow.Options) (http.Handler, erro
 	}
 	// Resolve the human price into atomic amounts and recipients from Seller configuration.
 	route, err := client.Route(ctx, seller.RouteOptions{
-		AcceptsOptions: seller.AcceptsOptions{Price: seller.PriceSpec{Amount: "0.01 USDC"}, Schemes: []string{"balance", "exact"}},
+		AcceptsOptions: seller.AcceptsOptions{Price: seller.PriceSpec{Amount: "0.01 USDC"}, Schemes: []string{"balance", "exact"}, PaymentFlow: flow},
 	})
 	if err != nil {
 		return nil, err
@@ -79,8 +79,8 @@ func newHandler(ctx context.Context, options inflow.Options) (http.Handler, erro
 		fmt.Fprintln(w, `{"widgets":[1,2,3]}`)
 	})
 	mux.HandleFunc("GET /free", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "No payment required") })
-	// Verification precedes the handler; settlement follows a successful handler response.
-	// The middleware buffers that response, but cannot undo application side effects.
+	// Authorization settles after a successful handler; upfront settles before it.
+	// Neither flow undoes application side effects or automatically refunds failures.
 	// Initialization above replaces the middleware's automatic startup synchronization.
 	return nethttp.PaymentMiddlewareFromHTTPServer(resource, nethttp.WithSyncFacilitatorOnStart(false))(mux), nil
 }

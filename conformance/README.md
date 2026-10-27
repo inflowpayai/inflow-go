@@ -65,6 +65,11 @@ That changes the explicit test input; it does not update the pin or excuse faile
   fixtures are served unchanged through local HTTP instead of Node's configuration-provider object.
   The cancel case observes `Wait` after `Cancel`, including a recognized API rejection of cleanup.
   The SDK's separately returned cancellation error remains covered by native tests.
+  Upfront cases cover offer metadata, Buyer forwarding, settlement outcomes and identical pending
+  retries. Native tests separately exercise the real upstream HTTP middleware and InFlow facilitator
+  client, including held settlement responses, handler failures, matching, receipts and concurrent
+  submissions. The local platform responses are synthetic; they do not prove blockchain settlement
+  or server-side deduplication.
 
 The Go adapter does not expose or call the internal raw HTTP client to imitate Node's runtime
 adapter. Runtime rejection fixtures are applied to the supported public endpoints; generic approval

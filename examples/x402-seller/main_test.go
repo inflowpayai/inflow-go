@@ -13,6 +13,7 @@ import (
 
 	inflow "github.com/inflowpayai/inflow-go"
 	"github.com/inflowpayai/inflow-go/x402"
+	foundation "github.com/x402-foundation/x402/go/v2"
 )
 
 func api(t *testing.T, scenario string) *httptest.Server {
@@ -58,11 +59,13 @@ func api(t *testing.T, scenario string) *httptest.Server {
 }
 
 func TestStartup(t *testing.T) {
-	for _, scenario := range []string{"missing-key", "bad-key", "rejected", "empty", "listen", "default-listen", "precision", "unsupported"} {
+	for _, scenario := range []string{"missing-key", "bad-key", "rejected", "empty", "listen", "default-listen", "precision", "unsupported", "invalid-flow"} {
 		t.Run(scenario, func(t *testing.T) {
 			server := api(t, scenario)
 			env := map[string]string{"INFLOW_API_KEY": "test-only-key", "INFLOW_BASE_URL": server.URL, "MPP_SECRET_KEY": "test-only-secret", "LISTEN_ADDR": "invalid::address"}
 			switch scenario {
+			case "invalid-flow":
+				env["X402_PAYMENT_FLOW"] = "escrow"
 			case "missing-key":
 				delete(env, "INFLOW_API_KEY")
 			case "missing-secret":
@@ -86,8 +89,14 @@ func TestStartup(t *testing.T) {
 }
 
 func TestRoutes(t *testing.T) {
+	for _, flow := range []foundation.PaymentFlowName{"", foundation.PaymentFlowAuthorization, foundation.PaymentFlowUpfront} {
+		t.Run(string(flow), func(t *testing.T) { testRoutes(t, flow) })
+	}
+}
+
+func testRoutes(t *testing.T, flow foundation.PaymentFlowName) {
 	platform := api(t, "valid")
-	handler, err := newHandler(context.Background(), inflow.Options{APIKey: "test-only-key", BaseURL: platform.URL})
+	handler, err := newHandler(context.Background(), inflow.Options{APIKey: "test-only-key", BaseURL: platform.URL}, flow)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +116,9 @@ func TestRoutes(t *testing.T) {
 		}
 		if len(required.Accepts) == 0 {
 			t.Fatal("missing offers")
+		}
+		if flow == foundation.PaymentFlowUpfront && required.Accepts[0].Extra["paymentFlow"] != "upfront" {
+			t.Fatal("missing upfront declaration")
 		}
 		payload := x402.PaymentPayload{X402Version: 2, Accepted: required.Accepts[0], Resource: required.Resource, Payload: map[string]any{"transactionId": "test"}}
 		encoded, err := json.Marshal(payload)

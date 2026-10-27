@@ -11,6 +11,18 @@ go run ./examples/x402-seller
 
 The server binds to `127.0.0.1:3001`.
 
+Authorization is the default. To settle before the handler runs, start it with:
+
+```sh
+X402_PAYMENT_FLOW=upfront go run ./examples/x402-seller
+```
+
+`X402_PAYMENT_FLOW=authorization` explicitly selects the default; other nonempty values fail
+startup. With upfront, an unsuccessful or uncertain settlement prevents handler execution.
+If the handler fails after successful settlement, the payment remains settled and its receipt
+is retained. There is no automatic refund. Choose upfront for fixed-price work that must be paid
+before it starts; choose authorization when a failed handler should not be charged.
+
 | Route | Result |
 | --- | --- |
 | `GET /api/widgets` | 0.01 USDC through configured balance or exact offers |
@@ -37,10 +49,14 @@ Payment-Required: <base64-encoded payment requirements>
 
 This 402 is the expected payment offer, not a failed server startup.
 Run the [x402 buyer](../x402-buyer/README.md)
-in another terminal with a separate buyer key to pay. The upstream middleware verifies payment,
+in another terminal with a separate buyer key to pay. In authorization mode, the upstream middleware verifies payment,
 runs the handler, and settles a successful response before releasing it. Settlement failure
 withholds the successful response, but cannot undo application side effects. This handler only
 returns JSON.
+
+In either mode, make application fulfillment safe to repeat: payment deduplication does not stop
+the handler from running again for the same payment. Keep the original payment when retrying;
+do not create another purchase because the application returned an error.
 
 Only the configured route is payment-protected. `/free` is deliberately unprotected; unknown
 routes return 404. Add application authentication outside this middleware when needed.

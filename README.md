@@ -509,6 +509,53 @@ conversion rejects nonzero precision loss. `Schemes` and `Networks` filters inte
 the default schemes (not instrument or metered `upto`), while an empty slice selects nothing.
 The default payment lifetime is 300 seconds.
 
+### Authorization or upfront payment
+
+`AcceptsOptions.PaymentFlow` selects when the upstream HTTP middleware settles a payment.
+Omit it, or use `foundation.PaymentFlowAuthorization`, for the authorization default:
+verify payment, run the handler, settle a successful response, then release that response.
+Choose this when a failed handler should not incur a payment. Settlement can still fail after
+your handler has done work; buffering its response does not undo database writes or other effects.
+
+Choose `foundation.PaymentFlowUpfront` when payment must complete before work starts, such as
+an expensive fixed-price computation:
+
+```go
+route, err := client.Route(ctx, seller.RouteOptions{
+    AcceptsOptions: seller.AcceptsOptions{
+        Price:       seller.PriceSpec{Amount: "$0.01"},
+        PaymentFlow: foundation.PaymentFlowUpfront,
+    },
+})
+```
+
+Upfront advertises `extra.paymentFlow: "upfront"`. The middleware waits for successful settlement
+before calling the handler. Rejection, exhausted pending retries, and an uncertain result prevent
+handler execution. It does not call a separate verification endpoint first: InFlow settlement
+performs payment verification. Buyers preserve the advertised flow through selection and signing;
+they do not need an upfront toggle.
+
+Supported upfront offers are fixed-price `exact` on EVM with EIP-3009 or Permit2, fixed-price
+`exact` on Solana, and InFlow `balance` or `instrument` on `inflow:1`. Seller configuration must
+advertise the corresponding capability. Instrument remains explicitly selected through `Schemes`.
+Metered `upto`, unknown transfer methods, and other networks are not enabled for upfront. Selecting
+an unsupported combination returns an error, including when it appears among otherwise valid offers.
+
+After successful upfront settlement, a handler error does not refund the payment. The middleware
+preserves the payment receipt on an error response and does not settle a second time for that
+execution. A panic is rethrown; if you want an HTTP error response, install recovery outside the
+payment middleware and preserve its receipt header. Without recovery, the HTTP server may close
+the connection rather than deliver the receipt.
+
+Retries reuse the payment and its identifier. Payment deduplication is not fulfillment deduplication:
+a repeated paid request can run your handler again. Make fulfillment idempotent and retain the
+payment identifier and application result so a retry does not create another purchase or duplicate
+work. Do not automatically buy another payment after a timeout or handler error.
+
+For a route offering MPP and x402, select the matching protocol handler as an alternative; do not
+stack two payment middlewares so that both payments are required. This option controls only x402.
+The [runnable x402 seller](examples/x402-seller/README.md) supports both flows.
+
 #### Metered payments
 
 Metered `upto` payments require explicit selection. Import the upstream implementation only in
