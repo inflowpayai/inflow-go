@@ -43,7 +43,7 @@ func (c *Client) SchemeRegistrations(ctx context.Context, options RegistrationOp
 				return
 			}
 		}
-		registrations = append(registrations, SchemeRegistration{Network: foundation.Network(network), Server: &passthrough{scheme: scheme, methods: []string{method}}})
+		registrations = append(registrations, SchemeRegistration{Network: foundation.Network(network), Server: &passthrough{scheme: scheme, network: network, methods: []string{method}}})
 	}
 	for _, asset := range config.Assets {
 		add(x402.SchemeExact, asset.Network, asset.AssetTransferMethod)
@@ -70,6 +70,7 @@ func (c *Client) SchemeRegistrations(ctx context.Context, options RegistrationOp
 
 type passthrough struct {
 	scheme  string
+	network string
 	methods []string
 }
 
@@ -78,7 +79,11 @@ func (s *passthrough) DefaultAssetTransferMethod() string { return s.methods[0] 
 func (s *passthrough) PaymentFlows() map[string]foundation.PaymentFlowConfig {
 	flows := map[string]foundation.PaymentFlowConfig{}
 	for _, method := range s.methods {
-		flows[method] = foundation.PaymentFlowConfig{Supported: []foundation.PaymentFlowName{foundation.PaymentFlowAuthorization}, Default: foundation.PaymentFlowAuthorization}
+		supported := []foundation.PaymentFlowName{foundation.PaymentFlowAuthorization}
+		if supportsUpfront(s.scheme, s.network, method) {
+			supported = append(supported, foundation.PaymentFlowUpfront)
+		}
+		flows[method] = foundation.PaymentFlowConfig{Supported: supported, Default: foundation.PaymentFlowAuthorization}
 	}
 	return flows
 }

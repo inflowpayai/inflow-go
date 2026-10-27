@@ -14,6 +14,7 @@ import (
 	"github.com/inflowpayai/inflow-go/x402"
 	b "github.com/inflowpayai/inflow-go/x402/buyer"
 	s "github.com/inflowpayai/inflow-go/x402/seller"
+	foundation "github.com/x402-foundation/x402/go/v2"
 )
 
 func executeX402(ctx context.Context, operation string, raw json.RawMessage) (result any, outcome error) {
@@ -34,6 +35,7 @@ func executeX402(ctx context.Context, operation string, raw json.RawMessage) (re
 			MaxTimeoutSeconds   int
 			Schemes, Networks   []string
 			AssetTransferMethod string
+			PaymentFlow         foundation.PaymentFlowName
 		}
 	}
 	if err := decode(raw, &input); err != nil {
@@ -144,7 +146,7 @@ func executeX402(ctx context.Context, operation string, raw json.RawMessage) (re
 				return nil, err
 			}
 		}
-		accepts := s.AcceptsOptions{Price: price, MaxTimeoutSeconds: input.Options.MaxTimeoutSeconds, Schemes: input.Options.Schemes, Networks: input.Options.Networks}
+		accepts := s.AcceptsOptions{Price: price, PaymentFlow: input.Options.PaymentFlow, MaxTimeoutSeconds: input.Options.MaxTimeoutSeconds, Schemes: input.Options.Schemes, Networks: input.Options.Networks}
 		if operation == "x402.seller.offers" {
 			return client.Accepts(ctx, accepts)
 		}

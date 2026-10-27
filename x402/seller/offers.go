@@ -24,6 +24,8 @@ type AcceptsOptions struct {
 	MaxTimeoutSeconds int
 	Schemes           []string
 	Networks          []string
+	// PaymentFlow defaults to authorization. Upfront settles before the handler runs.
+	PaymentFlow foundation.PaymentFlowName
 }
 
 type PriceError struct{ Input string }
@@ -103,6 +105,9 @@ func stringField(fields map[string]any, key string) string {
 }
 
 func buildOffers(config x402.ConfigResponse, options AcceptsOptions, transfer string) ([]xhttp.PaymentOption, error) {
+	if options.PaymentFlow != "" && options.PaymentFlow != foundation.PaymentFlowAuthorization && options.PaymentFlow != foundation.PaymentFlowUpfront {
+		return nil, fmt.Errorf("unsupported payment flow %q: use authorization or upfront", options.PaymentFlow)
+	}
 	integer, fraction, currency, err := parsePrice(options.Price)
 	if err != nil {
 		return nil, err
@@ -181,7 +186,28 @@ func buildOffers(config x402.ConfigResponse, options AcceptsOptions, transfer st
 			offers = append(offers, xhttp.PaymentOption{Scheme: method.Scheme, Network: foundation.Network(method.Network), PayTo: method.PayTo, Price: map[string]any{"asset": currency, "amount": amount}, MaxTimeoutSeconds: timeout, Extra: extra})
 		}
 	}
+	if options.PaymentFlow == foundation.PaymentFlowUpfront {
+		for _, offer := range offers {
+			if !supportsUpfront(offer.Scheme, string(offer.Network), stringField(offer.Extra, "assetTransferMethod")) {
+				return nil, fmt.Errorf("upfront is not supported for %s on %s with transfer method %q", offer.Scheme, offer.Network, stringField(offer.Extra, "assetTransferMethod"))
+			}
+			offer.Extra["paymentFlow"] = string(foundation.PaymentFlowUpfront)
+		}
+	}
 	return offers, nil
+}
+
+func supportsUpfront(scheme, network, method string) bool {
+	if method == "" {
+		method = foundation.SDKDefaultAssetTransferMethod
+	}
+	if scheme == x402.SchemeExact {
+		if strings.HasPrefix(network, "eip155:") {
+			return method == foundation.SDKDefaultAssetTransferMethod || method == "eip3009" || method == "permit2"
+		}
+		return strings.HasPrefix(network, "solana:") && (method == foundation.SDKDefaultAssetTransferMethod || method == "solana")
+	}
+	return network == "inflow:1" && (scheme == x402.SchemeBalance || scheme == x402.SchemeInstrument) && method == foundation.SDKDefaultAssetTransferMethod
 }
 
 func chainOffer(wallet x402.WalletInfo, asset x402.AssetInfo, method, amount string, timeout int, scheme string, additional map[string]any) xhttp.PaymentOption {

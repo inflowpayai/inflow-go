@@ -63,7 +63,7 @@ func TestSchemeRegistrations(t *testing.T) {
 		t.Fatal("transfer methods lost")
 	}
 	for _, flow := range server.PaymentFlows() {
-		if flow.Default != foundation.PaymentFlowAuthorization || len(flow.Supported) != 1 {
+		if flow.Default != foundation.PaymentFlowAuthorization || len(flow.Supported) != 2 || flow.Supported[1] != foundation.PaymentFlowUpfront {
 			t.Fatal(flow)
 		}
 	}

@@ -67,9 +67,10 @@ decoding does not independently verify settlement. A successful free response ca
 receipt; missing receipts are reported without claiming that no payment happened.
 The programs do not print the submitted payment credential or signature.
 
-MPP processes payment **before** the application handler runs. x402 settles a successful handler
-response before releasing it. Neither makes application side effects transactional with payment.
-The demonstration handlers only return content.
+MPP processes payment **before** the application handler runs. In its default authorization mode,
+x402 settles a successful handler response before releasing it. The x402 seller also accepts
+`X402_PAYMENT_FLOW=upfront` to settle before running the handler. Neither flow makes application
+side effects transactional with payment. The demonstration handlers only return content.
 
 `make verify` builds all five programs, tests startup and HTTP behavior against local servers,
 and runs race detection and coverage checks. Inert keys and scripted platform responses test
