@@ -253,6 +253,7 @@ func TestCredentialPreservation(t *testing.T) {
 func TestReceiptPreservation(t *testing.T) {
 	r := receipt()
 	r.ChallengeID = ptr("challenge")
+	r.InflowTransactionID = ptr("22222222-2222-4222-8222-222222222222")
 	r.SubscriptionID = ptr("subscription")
 	r.ExternalID = ptr("")
 	r.Settlement = &mpp.Settlement{Amount: "10.00", Currency: "USD"}

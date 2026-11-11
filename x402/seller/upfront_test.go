@@ -266,6 +266,10 @@ func TestUpfrontMiddlewareOrderAndFailures(t *testing.T) {
 					return
 				}
 				result := x402.SettleResponse{Success: tc.result != "rejected", Transaction: "transaction", Network: "inflow:1"}
+				result.Extensions = map[string]any{x402.InflowTransaction: map[string]any{
+					"info":   map[string]any{"transactionId": "22222222-2222-4222-8222-222222222222"},
+					"schema": map[string]any{"type": "object", "properties": map[string]any{"transactionId": map[string]any{"type": "string", "format": "uuid"}}, "required": []string{"transactionId"}},
+				}, "other": map[string]any{"keep": true}}
 				if !result.Success {
 					result.ErrorReason = "rejected"
 				}
@@ -313,6 +317,12 @@ func TestUpfrontMiddlewareOrderAndFailures(t *testing.T) {
 				var receipt x402.SettleResponse
 				if err := json.Unmarshal(raw, &receipt); err != nil || !receipt.Success || receipt.Transaction != "transaction" {
 					t.Fatal("lost successful settlement receipt", receipt, err)
+				}
+				if x402.InflowTransactionID(&receipt) != "22222222-2222-4222-8222-222222222222" || receipt.Extensions["other"] == nil {
+					t.Fatal("lost settlement extensions", receipt)
+				}
+				if receipt.Extensions[x402.InflowTransaction].(map[string]any)["schema"] == nil {
+					t.Fatal("lost correlation schema")
 				}
 				if !tc.panicHandler && response.Code != tc.status {
 					t.Fatal(response)
