@@ -45,20 +45,21 @@ type Settlement struct {
 // InFlow fields cannot be moved into upstream's nested extra object without
 // changing the receipt's wire format.
 type Receipt struct {
-	Method         string                     `json:"method"`
-	Reference      string                     `json:"reference"`
-	Status         string                     `json:"status"`
-	Timestamp      string                     `json:"timestamp"`
-	ChallengeID    *string                    `json:"challengeId,omitempty"`
-	SubscriptionID *string                    `json:"subscriptionId,omitempty"`
-	ExternalID     *string                    `json:"externalId,omitempty"`
-	Settlement     *Settlement                `json:"settlement,omitempty"`
-	Extensions     map[string]json.RawMessage `json:"-"`
+	Method              string                     `json:"method"`
+	Reference           string                     `json:"reference"`
+	Status              string                     `json:"status"`
+	Timestamp           string                     `json:"timestamp"`
+	ChallengeID         *string                    `json:"challengeId,omitempty"`
+	InflowTransactionID *string                    `json:"inflowTransactionId,omitempty"`
+	SubscriptionID      *string                    `json:"subscriptionId,omitempty"`
+	ExternalID          *string                    `json:"externalId,omitempty"`
+	Settlement          *Settlement                `json:"settlement,omitempty"`
+	Extensions          map[string]json.RawMessage `json:"-"`
 }
 
 type receiptFields Receipt
 
-var receiptKeys = []string{"method", "reference", "status", "timestamp", "challengeId", "subscriptionId", "externalId", "settlement"}
+var receiptKeys = []string{"method", "reference", "status", "timestamp", "challengeId", "inflowTransactionId", "subscriptionId", "externalId", "settlement"}
 
 func (r Receipt) MarshalJSON() ([]byte, error) {
 	fields := map[string]any{
@@ -74,6 +75,9 @@ func (r Receipt) MarshalJSON() ([]byte, error) {
 	}
 	if r.Settlement != nil {
 		fields["settlement"] = r.Settlement
+	}
+	if r.InflowTransactionID != nil && len(*r.InflowTransactionID) == 36 && guid.MatchString(*r.InflowTransactionID) {
+		fields["inflowTransactionId"] = *r.InflowTransactionID
 	}
 	for key, value := range r.Extensions {
 		for _, reserved := range receiptKeys {
@@ -92,8 +96,17 @@ func (r *Receipt) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	var fields receiptFields
-	if err := json.Unmarshal(data, &fields); err != nil {
+	var correlation struct {
+		*receiptFields
+		InflowTransactionID json.RawMessage `json:"inflowTransactionId"`
+	}
+	correlation.receiptFields = &fields
+	if err := json.Unmarshal(data, &correlation); err != nil {
 		return err
+	}
+	var id string
+	if json.Unmarshal(correlation.InflowTransactionID, &id) == nil && len(id) == 36 && guid.MatchString(id) {
+		fields.InflowTransactionID = &id
 	}
 	for _, key := range receiptKeys {
 		delete(extra, key)

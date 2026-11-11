@@ -82,7 +82,14 @@ func TestActualUpstreamMiddleware(t *testing.T) {
 						if scenario.amount != "" && request.PaymentPayload.Accepted.Amount != "1000000" {
 							t.Error("signed ceiling changed")
 						}
-						json.NewEncoder(w).Encode(x402.SettleResponse{Success: scenario.settle, Transaction: "transaction", Network: foundation.Network(request.PaymentRequirements.Network)})
+						extensions := map[string]any{"other": map[string]any{"keep": true}}
+						if scenario.scheme != "balance" {
+							extensions[x402.InflowTransaction] = map[string]any{
+								"info":   map[string]any{"transactionId": "22222222-2222-4222-8222-222222222222"},
+								"schema": map[string]any{"type": "object", "properties": map[string]any{"transactionId": map[string]any{"type": "string", "format": "uuid"}}, "required": []string{"transactionId"}},
+							}
+						}
+						json.NewEncoder(w).Encode(x402.SettleResponse{Success: scenario.settle, Transaction: "transaction", Network: foundation.Network(request.PaymentRequirements.Network), Extensions: extensions})
 					}
 				default:
 					t.Error(r.URL.Path)
@@ -170,6 +177,25 @@ func TestActualUpstreamMiddleware(t *testing.T) {
 				if scenario.verify && scenario.settle && scenario.handlerStatus == 200 {
 					if response.Code != 200 || response.Body.String() != "protected-content" || response.Header().Get(x402.HeaderPaymentResponse) == "" || !strings.Contains(response.Header().Get("Cache-Control"), "private") {
 						t.Fatal(response)
+					}
+					raw, err := base64.StdEncoding.DecodeString(response.Header().Get(x402.HeaderPaymentResponse))
+					if err != nil {
+						t.Fatal(err)
+					}
+					var receipt x402.SettleResponse
+					if err := json.Unmarshal(raw, &receipt); err != nil || receipt.Transaction != "transaction" || receipt.Extensions["other"] == nil {
+						t.Fatalf("lost settlement fields: %#v %v", receipt, err)
+					}
+					wantID := ""
+					if scenario.scheme != "balance" {
+						wantID = "22222222-2222-4222-8222-222222222222"
+						entry := receipt.Extensions[x402.InflowTransaction].(map[string]any)
+						if entry["schema"] == nil {
+							t.Fatal("lost correlation schema")
+						}
+					}
+					if x402.InflowTransactionID(&receipt) != wantID {
+						t.Fatal("incorrect correlation", receipt)
 					}
 				} else if scenario.handlerStatus != 500 && (response.Code < 400 || strings.Contains(response.Body.String(), "protected-content")) {
 					t.Fatal("released protected output", response)

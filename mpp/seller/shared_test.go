@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 
@@ -265,68 +266,87 @@ func receiptJSON() string {
 }
 
 func TestHTTPRoundTrip(t *testing.T) {
-	var calls []string
-	var mu sync.Mutex
-	platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		mu.Lock()
-		calls = append(calls, r.URL.Path)
-		mu.Unlock()
-		if r.Header.Get("X-API-Key") != "test-only-seller-key" {
-			t.Error("missing Seller key")
-		}
-		switch r.URL.Path {
-		case "/v1/mpp/config":
-			fmt.Fprint(w, configJSON)
-		case "/v1/mpp/validate":
-			writeValidation(w, r)
-		case "/v1/mpp/broadcast":
-			fmt.Fprint(w, receiptJSON())
-		default:
-			t.Error(r.URL.Path)
-		}
-	}))
-	defer platform.Close()
-	c := clientFor(t, platform)
-	offer := chargeOffer()
-	h, err := c.Protect(seller.Route{Realm: "seller.example", SecretKey: "test-only-key", Offers: []seller.Offer{offer}}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "paid") }))
-	if err != nil {
-		t.Fatal(err)
-	}
-	offer.Charge.Amount = "999"
-	resource := httptest.NewServer(h)
-	defer resource.Close()
-	response, err := http.Get(resource.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	response.Body.Close()
-	challenges, err := mpp.ParseChallenges(response.Header.Values("WWW-Authenticate"))
-	if err != nil || len(challenges) != 1 {
-		t.Fatal(err)
-	}
-	request, _ := mpp.Decode(challenges[0].Request)
-	if request.(map[string]any)["amount"] != "1" {
-		t.Fatal("caller mutation changed route")
-	}
-	encoded, err := mpp.EncodeCredential(mpp.Credential{Challenge: challenges[0], Payload: map[string]any{"transactionId": "test", "large": json.Number("9007199254740993")}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	r, _ := http.NewRequest("GET", resource.URL, nil)
-	r.Header.Set("Authorization", "Payment "+encoded)
-	response, err = http.DefaultClient.Do(r)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer response.Body.Close()
-	body, _ := io.ReadAll(response.Body)
-	if response.StatusCode != 200 || string(body) != "paid" || response.Header.Get("Payment-Receipt") == "" {
-		t.Fatal(response.Status, string(body))
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if len(calls) != 3 {
-		t.Fatal(calls)
+	for _, tc := range []struct{ name, correlation, wantID string }{
+		{"absent", "", ""},
+		{"present", `,"inflowTransactionId":"22222222-2222-4222-8222-222222222222"`, "22222222-2222-4222-8222-222222222222"},
+		{"malformed", `,"inflowTransactionId":42`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var calls []string
+			var mu sync.Mutex
+			platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				calls = append(calls, r.URL.Path)
+				mu.Unlock()
+				if r.Header.Get("X-API-Key") != "test-only-seller-key" {
+					t.Error("missing Seller key")
+				}
+				switch r.URL.Path {
+				case "/v1/mpp/config":
+					fmt.Fprint(w, configJSON)
+				case "/v1/mpp/validate":
+					writeValidation(w, r)
+				case "/v1/mpp/broadcast":
+					fmt.Fprint(w, strings.Replace(receiptJSON(), `"reference":"test"`, `"reference":"test"`+tc.correlation, 1))
+				default:
+					t.Error(r.URL.Path)
+				}
+			}))
+			defer platform.Close()
+			c := clientFor(t, platform)
+			offer := chargeOffer()
+			h, err := c.Protect(seller.Route{Realm: "seller.example", SecretKey: "test-only-key", Offers: []seller.Offer{offer}}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "paid") }))
+			if err != nil {
+				t.Fatal(err)
+			}
+			offer.Charge.Amount = "999"
+			resource := httptest.NewServer(h)
+			defer resource.Close()
+			response, err := http.Get(resource.URL)
+			if err != nil {
+				t.Fatal(err)
+			}
+			response.Body.Close()
+			challenges, err := mpp.ParseChallenges(response.Header.Values("WWW-Authenticate"))
+			if err != nil || len(challenges) != 1 {
+				t.Fatal(err)
+			}
+			request, _ := mpp.Decode(challenges[0].Request)
+			if request.(map[string]any)["amount"] != "1" {
+				t.Fatal("caller mutation changed route")
+			}
+			encoded, err := mpp.EncodeCredential(mpp.Credential{Challenge: challenges[0], Payload: map[string]any{"transactionId": "test", "large": json.Number("9007199254740993")}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r, _ := http.NewRequest("GET", resource.URL, nil)
+			r.Header.Set("Authorization", "Payment "+encoded)
+			response, err = http.DefaultClient.Do(r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer response.Body.Close()
+			body, _ := io.ReadAll(response.Body)
+			if response.StatusCode != 200 || string(body) != "paid" || response.Header.Get("Payment-Receipt") == "" {
+				t.Fatal(response.Status, string(body))
+			}
+			receipt, err := mpp.DecodeReceipt(response.Header.Get("Payment-Receipt"))
+			if err != nil || receipt.Reference != "test" {
+				t.Fatalf("receipt: %#v %v", receipt, err)
+			}
+			if tc.wantID != "" {
+				if receipt.InflowTransactionID == nil || *receipt.InflowTransactionID != tc.wantID {
+					t.Fatal("lost transaction ID", receipt)
+				}
+			} else if receipt.InflowTransactionID != nil {
+				t.Fatal("invented transaction ID", receipt)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if len(calls) != 3 {
+				t.Fatal(calls)
+			}
+		})
 	}
 }
 
