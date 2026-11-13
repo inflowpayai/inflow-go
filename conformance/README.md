@@ -4,7 +4,7 @@ The adapters call the public Go SDK and compare its results with `inflow-specs`.
 files compiled into a separate, race-enabled test binary. They do not add dependencies to an
 application using the SDK. Node.js runs the shared test runner, not payment code.
 
-Use Go 1.26 or later, Node.js 24, and the pnpm version declared by `inflow-specs`. Prepare a clean
+Use Go 1.26.10 or later, Node.js 24, and the pnpm version declared by `inflow-specs`. Prepare a clean
 checkout of `inflow-specs` at the commit in [inflow-specs.lock.json](inflow-specs.lock.json), then
 run `pnpm install --frozen-lockfile` in that checkout. From this repository:
 

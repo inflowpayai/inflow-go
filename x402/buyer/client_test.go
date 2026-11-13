@@ -141,7 +141,7 @@ func TestCallbackJSONBoundaries(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if err := c.after(ctx, x402.PaymentRequired{}, x402.PaymentPayload{}); !errors.Is(err, context.Canceled) {
+	if err := c.after(ctx, x402.PaymentRequired{}, x402.PaymentPayload{X402Version: 2, Accepted: x402.PaymentRequirements{Scheme: "balance", Network: "inflow:1"}}); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	if _, err := c.policies(ctx, nil); !errors.Is(err, context.Canceled) {

@@ -24,6 +24,30 @@ func receipt() mpp.Receipt {
 	return mpp.Receipt{Method: "inflow", Reference: "reference", Status: "success", Timestamp: "2026-09-01T12:00:00Z"}
 }
 
+func TestUnsupportedHeaderSelection(t *testing.T) {
+	header, err := mpp.RenderChallenge(challenge())
+	if err != nil {
+		t.Fatal(err)
+	}
+	unsupported := header + `, header="Payment-Authorization"`
+	if _, err := mpp.ParseChallenge(unsupported); err == nil {
+		t.Fatal("single unsupported challenge accepted")
+	}
+	for _, headers := range [][]string{{unsupported, header}, {header, unsupported}, {unsupported + ", " + header}} {
+		got, err := mpp.ParseChallenges(headers)
+		if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0], challenge()) {
+			t.Fatalf("selection: %#v %v", got, err)
+		}
+	}
+	got, err := mpp.ParseChallenges([]string{unsupported})
+	if err != nil || len(got) != 0 {
+		t.Fatalf("unsupported selection: %#v %v", got, err)
+	}
+	if _, err := mpp.ParseChallenges([]string{`Payment id="x", header="Payment-Authorization"`, header}); err == nil {
+		t.Fatal("malformed challenge skipped")
+	}
+}
+
 func TestSharedCoreCases(t *testing.T) {
 	data, err := os.ReadFile("testdata/core.json")
 	if err != nil {

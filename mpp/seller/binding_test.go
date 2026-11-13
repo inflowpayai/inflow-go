@@ -29,13 +29,13 @@ func TestNodeChallengeBinding(t *testing.T) {
 	}
 	for _, mutate := range []func(*mpp.Challenge){
 		func(c *mpp.Challenge) { c.ID = "forged" }, func(c *mpp.Challenge) { c.Expires = nil }, func(c *mpp.Challenge) { v := "bad"; c.Expires = &v }, func(c *mpp.Challenge) { v := "2000-01-01T00:00:00Z"; c.Expires = &v },
-		func(c *mpp.Challenge) { c.Realm = "other" }, func(c *mpp.Challenge) { v := "different"; c.Opaque = &v }, func(c *mpp.Challenge) { c.Method = "tempo" }, func(c *mpp.Challenge) { c.Intent = "subscription" },
+		func(c *mpp.Challenge) { c.Realm = "other" }, func(c *mpp.Challenge) { v := "eyJyb3V0ZSI6Im90aGVyIn0"; c.Opaque = &v }, func(c *mpp.Challenge) { c.Method = "tempo" }, func(c *mpp.Challenge) { c.Intent = "subscription" },
 		func(c *mpp.Challenge) { c.Request = "bad"; c.ID = challengeID(*c, route.SecretKey) }, func(c *mpp.Challenge) { c.Request = "W10"; c.ID = challengeID(*c, route.SecretKey) },
 		func(c *mpp.Challenge) { c.Request = "e30"; c.ID = challengeID(*c, route.SecretKey) },
 	} {
-		value := credential
-		mutate(&value.Challenge)
-		if matches(route, offer, value) {
+		wire := mpp.Credential{Challenge: c, Payload: map[string]any{}}
+		mutate(&wire.Challenge)
+		if matches(route, offer, wire) {
 			t.Fatal("tampered credential accepted")
 		}
 	}

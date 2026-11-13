@@ -146,14 +146,14 @@ func TestExternalRecoveryAndIdentifier(t *testing.T) {
 		wantError error
 		success   bool
 	}{
-		{name: "success", success: true},
+		{name: "success", external: externalStub{payload: x402.PaymentPayload{X402Version: 2, Accepted: r.Accepts[0], Payload: map[string]any{"signature": "test-signature"}}}, success: true},
 		{name: "selection error", external: externalStub{selectErr: sentinel}, wantError: sentinel},
 		{name: "signing error", external: externalStub{signErr: sentinel}, wantError: sentinel},
 		{name: "required identifier", mandatory: true},
 		{name: "no recovery", external: externalStub{signErr: sentinel}, hooks: []buyer.Hooks{{Failure: func(context.Context, x402.PaymentRequired, error) (*x402.PaymentPayload, error) { return nil, nil }}}, wantError: sentinel},
 		{name: "recovery error", external: externalStub{signErr: sentinel}, hooks: []buyer.Hooks{{Failure: func(context.Context, x402.PaymentRequired, error) (*x402.PaymentPayload, error) { return nil, sentinel }}}, wantError: sentinel},
 		{name: "recovered", external: externalStub{signErr: sentinel}, hooks: []buyer.Hooks{{Failure: func(context.Context, x402.PaymentRequired, error) (*x402.PaymentPayload, error) {
-			return &x402.PaymentPayload{X402Version: 2}, nil
+			return &x402.PaymentPayload{X402Version: 2, Accepted: r.Accepts[0], Payload: map[string]any{"signature": "test-signature"}}, nil
 		}}}, success: true},
 		{name: "invalid recovery", external: externalStub{signErr: sentinel}, hooks: []buyer.Hooks{{Failure: func(context.Context, x402.PaymentRequired, error) (*x402.PaymentPayload, error) {
 			return &x402.PaymentPayload{Payload: map[string]any{"bad": make(chan int)}}, nil

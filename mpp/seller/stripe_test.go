@@ -168,7 +168,7 @@ func TestStripeProtectedRoute(t *testing.T) {
 				if mode == "bad-receipt" {
 					id = "wrong"
 				}
-				json.NewEncoder(w).Encode(map[string]any{"receipt": mpp.Receipt{Method: "stripe", Reference: "pi_test", Status: "success", Timestamp: "2026-10-07T00:00:00Z", ChallengeID: &id}})
+				json.NewEncoder(w).Encode(map[string]any{"receipt": map[string]any{"method": "stripe", "reference": "pi_test", "status": "success", "timestamp": "2026-10-07T00:00:00Z", "challengeId": &id}})
 			}))
 			defer platform.Close()
 			client := clientFor(t, platform)
@@ -176,7 +176,7 @@ func TestStripeProtectedRoute(t *testing.T) {
 			if mode == "reference" || mode == "reference-mismatch" {
 				offer.ExternalID = new("")
 			}
-			route := seller.Route{Realm: "seller.example", SecretKey: "test-only-secret", Offers: []seller.Offer{{Stripe: &offer}}, Opaque: new("route-one")}
+			route := seller.Route{Realm: "seller.example", SecretKey: "test-only-secret", Offers: []seller.Offer{{Stripe: &offer}}, Opaque: new("eyJyb3V0ZSI6Im9uZSJ9")}
 			if mode == "expired" {
 				route.Lifetime = time.Nanosecond
 			}

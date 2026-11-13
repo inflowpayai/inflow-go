@@ -177,7 +177,7 @@ func TestStripeRoute(t *testing.T) {
 			w.WriteHeader(500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"receipt": mpp.Receipt{Method: "stripe", Reference: "pi_test", Status: "success", Timestamp: "2026-10-07T00:00:00Z", ChallengeID: &body.Credential.Challenge.ID}})
+		json.NewEncoder(w).Encode(map[string]any{"receipt": map[string]any{"method": "stripe", "reference": "pi_test", "status": "success", "timestamp": "2026-10-07T00:00:00Z", "challengeId": &body.Credential.Challenge.ID}})
 	}))
 	defer platform.Close()
 	options := inflow.Options{APIKey: "test-only-key", BaseURL: platform.URL}
@@ -236,7 +236,7 @@ func TestCardRoute(t *testing.T) {
 			w.WriteHeader(500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]any{"receipt": mpp.Receipt{Method: "card", Reference: "test", Status: "success", Timestamp: "2026-10-07T00:00:00Z", ChallengeID: &body.Credential.Challenge.ID}})
+		json.NewEncoder(w).Encode(map[string]any{"receipt": map[string]any{"method": "card", "reference": "test", "status": "success", "timestamp": "2026-10-07T00:00:00Z", "challengeId": &body.Credential.Challenge.ID}})
 	}))
 	defer platform.Close()
 	handler, err := newHandler(context.Background(), inflow.Options{APIKey: "test-only-key", BaseURL: platform.URL}, "test-only-secret", "card")

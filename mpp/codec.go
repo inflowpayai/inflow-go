@@ -177,7 +177,7 @@ func DecodeCredential(value string) (Credential, error) {
 	var result Credential
 	data, err := decodeBytes(value, "credential")
 	if err != nil {
-		return result, err
+		return Credential{}, err
 	}
 	if err := decodeJSON(data, &result); err != nil {
 		return Credential{}, invalid("credential", "invalid field type")
@@ -214,7 +214,7 @@ func DecodeReceipt(value string) (Receipt, error) {
 	var result Receipt
 	data, err := decodeBytes(value, "receipt")
 	if err != nil {
-		return result, err
+		return Receipt{}, err
 	}
 	if err := json.Unmarshal(data, &result); err != nil {
 		return Receipt{}, invalid("receipt", "invalid field type")

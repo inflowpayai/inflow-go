@@ -5,7 +5,7 @@ It needs a public origin configuration, not an InFlow API key.
 
 The MPP and x402 programs use **InFlow Sandbox**, not a simulated payment platform. Sellers run locally,
 but configuration, approvals, and payment processing use your Sandbox accounts.
-Use Go 1.26 or later and run commands from the repository root.
+Use Go 1.26.10 or later and run commands from the repository root.
 
 ## Before you start
 
