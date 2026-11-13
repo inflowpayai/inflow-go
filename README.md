@@ -512,6 +512,44 @@ conversion rejects nonzero precision loss. `Schemes` and `Networks` filters inte
 the default schemes (not instrument or metered `upto`), while an empty slice selects nothing.
 The default payment lifetime is 300 seconds.
 
+#### Request-time x402 pricing
+
+Use `seller.ProtectRequest` on an individual protected route when pricing depends on the
+request. Reuse facilitator clients and scheme registrations and return a fresh `xhttp.RouteConfig`:
+
+```go
+serverOptions := []foundation.ResourceServerOption{foundation.WithFacilitatorClient(facilitator)}
+for _, registration := range registrations {
+    serverOptions = append(serverOptions, foundation.WithSchemeServer(registration.Network, registration.Server))
+}
+protected, err := seller.ProtectRequest(seller.RequestPricingServer{Options: serverOptions},
+    inflow.RequestPricingOptions{},
+    func(r *http.Request, body []byte) (xhttp.RouteConfig, error) {
+        price := "0.01 USDC"
+        if r.URL.Query().Get("bundle") == "large" { price = "0.02 USDC" }
+        return client.Route(r.Context(), seller.RouteOptions{
+            AcceptsOptions: seller.AcceptsOptions{Price: seller.PriceSpec{Amount: price}},
+        })
+    }, handler)
+if err != nil { return err }
+mux.Handle("GET /api/widgets", protected)
+```
+
+The callback resolves once per request, including paid retries. Its complete route retains
+metadata, extensions and payment-flow settings. An empty offer list fails closed. Verification,
+handler buffering and settlement use upstream `net/http` middleware. Upstream middleware options
+can be passed after `handler`. Each request gets an isolated resource server, initialized using
+the shared facilitator client's cached capabilities. `RequestPricingServer.Configure` installs
+custom payment and HTTP hooks on that server before initialization. Configuration callbacks and
+shared scheme implementations must be safe for concurrent requests. Validate a representative
+route at startup, as shown in the seller example, to catch configuration errors before serving traffic.
+Set `RequestPricingServer.RoutePattern` for Bazaar discovery or route-aware hooks. It uses upstream
+x402 syntax, such as `GET /widgets/:id`, rather than Go's `GET /widgets/{id}`. Unmatched requests
+return `404` without executing the paid handler. Without a pattern, all requests reaching the
+handler are protected; advertising Bazaar without a pattern returns a configuration error.
+Handle browser preflight requests in application middleware outside the protected handler.
+See [request-pricing input and errors](#request-pricing-input-and-errors) for bounded body access.
+
 ### Authorization or upfront payment
 
 `AcceptsOptions.PaymentFlow` selects when the upstream HTTP middleware settles a payment.
@@ -842,7 +880,7 @@ If validation or broadcast returns a payment problem with an HTTP error status,
 It does not serve paid content, emit a successful receipt, or offer a new purchase.
 For example, pending settlement can return `503`; keep the original transaction and
 credential when checking its status or retrying. Malformed problems and other
-verification errors return a generic `402` challenge without exposing internal errors.
+verification errors return a generic `502` without issuing another payment challenge.
 
 Instrument receipts must identify the `inflow` method and the original challenge. A mismatched
 receipt prevents the paid handler from running; it does not reverse a payment or authorize a retry.
@@ -857,8 +895,46 @@ separate API-key or cookie authentication avoids conflicting with that header. `
 which configured offers are advertised. It is not access control and does not revoke credentials
 already issued for a matching offer. Optional `Opaque` is an encoded value signed into the
 challenge; use distinct values when otherwise identical offers must not be interchangeable across
-routes. The middleware does not bind the HTTP request body to payment; enforce application-specific
-request authorization in your own handler or middleware.
+routes. `Protect` does not bind the HTTP request body to payment. Use body-aware request pricing
+when the credential must be bound to the submitted bytes.
+
+#### Request-time MPP pricing
+
+`client.ProtectRequest` resolves a fresh `Route` once per request before validating payment:
+
+```go
+handler, err := client.ProtectRequest(inflow.RequestPricingOptions{},
+    func(r *http.Request, body []byte) (seller.Route, error) {
+        price := "0.01"
+        if r.URL.Query().Get("bundle") == "large" { price = "0.02" }
+        return seller.Route{
+            Realm: "api.example.com", SecretKey: os.Getenv("MPP_SECRET_KEY"),
+            Offers: []seller.Offer{{Charge: &mpp.ChargeRequest{Amount: price, Currency: "USDC"}}},
+        }, nil
+    }, paidHandler)
+if err != nil { return err }
+mux.Handle("GET /api/widgets", handler)
+```
+
+The returned route supports the same offers, opaque binding and lifetime as `Protect`.
+A credential for a different resolved price is not validated or broadcast. Keep pricing stable
+between an unpaid request and its paid retry; volatile quotes need application-managed stability.
+With `MaxBodyBytes` enabled, the challenge also binds the exact body bytes using MPP's digest.
+
+#### Request-pricing input and errors
+
+MPP and x402 callbacks receive a cloned request for metadata and an optional body byte slice.
+The default `MaxBodyBytes: 0` leaves the body unread; set a positive limit, such as `2 << 20`,
+to inspect it. The original bytes remain available to the application handler. An oversized
+body returns `413`; a body-read error returns `400`. Pricing or route-construction errors return
+a generic `500` with no payment challenge or handler execution. `OnError` can receive the
+original error for application diagnostics; the SDK does not log it or expose it to buyers.
+
+Callbacks must honor `r.Context()` and be safe for concurrent requests. Return fresh route values
+instead of mutating shared offers. x402 body access supplies pricing
+input, not a cryptographic body binding. The selected x402 scheme still governs payment proof.
+
+#### Direct MPP operations
 
 For custom integrations, `Prepare` resolves a typed offer without minting a challenge. `Validate`
 performs the non-consuming platform check, `Broadcast` performs the terminal payment operation,

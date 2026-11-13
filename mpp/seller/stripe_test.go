@@ -232,6 +232,9 @@ func TestStripeProtectedRoute(t *testing.T) {
 				}
 			} else {
 				status := 402
+				if mode == "reference-mismatch" || mode == "rejected" || mode == "bad-receipt" {
+					status = 502
+				}
 				if mode == "pending" {
 					status = 503
 				}

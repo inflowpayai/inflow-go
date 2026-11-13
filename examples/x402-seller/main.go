@@ -13,7 +13,6 @@ import (
 	"github.com/inflowpayai/inflow-go/x402/seller"
 	foundation "github.com/x402-foundation/x402/go/v2"
 	xhttp "github.com/x402-foundation/x402/go/v2/http"
-	"github.com/x402-foundation/x402/go/v2/http/nethttp"
 )
 
 func main() {
@@ -65,22 +64,36 @@ func newHandler(ctx context.Context, options inflow.Options, flow foundation.Pay
 	if len(route.Accepts) == 0 {
 		return nil, errors.New("Seller configuration has no compatible payment offers")
 	}
-	resource := xhttp.Newx402HTTPResourceServer(xhttp.RoutesConfig{"GET /api/widgets": route}, foundation.WithFacilitatorClient(facilitator))
+	serverOptions := []foundation.ResourceServerOption{foundation.WithFacilitatorClient(facilitator)}
 	for _, registration := range registrations {
-		resource.Register(registration.Network, registration.Server)
+		serverOptions = append(serverOptions, foundation.WithSchemeServer(registration.Network, registration.Server))
 	}
+	resource := xhttp.Newx402HTTPResourceServer(xhttp.RoutesConfig{"GET /api/widgets": route}, serverOptions...)
 	// Fail startup on incompatible configuration rather than fail the first customer's request.
 	if err := resource.Initialize(ctx); err != nil {
 		return nil, err
 	}
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /api/widgets", func(w http.ResponseWriter, r *http.Request) {
+	// Constant valid options and a non-nil handler; route errors are returned per request.
+	protected, _ := seller.ProtectRequest(seller.RequestPricingServer{Options: serverOptions}, inflow.RequestPricingOptions{}, func(r *http.Request, _ []byte) (xhttp.RouteConfig, error) {
+		price := "0.01 USDC"
+		if r.URL.Query().Get("bundle") == "large" {
+			price = "0.02 USDC"
+		}
+		return client.Route(r.Context(), seller.RouteOptions{
+			AcceptsOptions: seller.AcceptsOptions{Price: seller.PriceSpec{Amount: price}, Schemes: []string{"balance", "exact"}, PaymentFlow: flow},
+		})
+	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		fmt.Fprintln(w, `{"widgets":[1,2,3]}`)
-	})
+		if r.URL.Query().Get("bundle") == "large" {
+			fmt.Fprintln(w, `{"widgets":[1,2,3,4,5,6]}`)
+		} else {
+			fmt.Fprintln(w, `{"widgets":[1,2,3]}`)
+		}
+	}))
+	mux.Handle("GET /api/widgets", protected)
 	mux.HandleFunc("GET /free", func(w http.ResponseWriter, r *http.Request) { fmt.Fprintln(w, "No payment required") })
 	// Authorization settles after a successful handler; upfront settles before it.
 	// Neither flow undoes application side effects or automatically refunds failures.
-	// Initialization above replaces the middleware's automatic startup synchronization.
-	return nethttp.PaymentMiddlewareFromHTTPServer(resource, nethttp.WithSyncFacilitatorOnStart(false))(mux), nil
+	return mux, nil
 }

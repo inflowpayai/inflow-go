@@ -41,6 +41,9 @@ func run(getenv func(string) string) error {
 }
 
 func newHandler(ctx context.Context, options inflow.Options, secret, method string) (http.Handler, error) {
+	if secret == "" {
+		return nil, errors.New("MPP_SECRET_KEY is required")
+	}
 	client, err := seller.New(options)
 	if err != nil {
 		return nil, err
@@ -76,17 +79,34 @@ func newHandler(ctx context.Context, options inflow.Options, secret, method stri
 		if _, err := client.Prepare(ctx, offer); err != nil {
 			return nil, err
 		}
-		// Protect issues unpaid challenges and processes payment before this handler runs.
-		// A handler error cannot undo that payment.
-		protected, err := client.Protect(seller.Route{
-			Realm: "inflow-go-example", SecretKey: secret, Offers: []seller.Offer{offer}, Opaque: &opaque,
+		// Constant valid options and a non-nil handler; route errors are returned per request.
+		protected, _ := client.ProtectRequest(inflow.RequestPricingOptions{}, func(r *http.Request, _ []byte) (seller.Route, error) {
+			selected := offer
+			if r.URL.Query().Get("bundle") == "large" {
+				switch {
+				case offer.Charge != nil:
+					charge := *offer.Charge
+					charge.Amount = "0.02"
+					selected.Charge = &charge
+				case offer.Stripe != nil:
+					stripe := *offer.Stripe
+					stripe.Amount = "2.50"
+					selected.Stripe = &stripe
+				case offer.Card != nil:
+					card := *offer.Card
+					card.Amount = "2.50"
+					selected.Card = &card
+				}
+			}
+			return seller.Route{Realm: "inflow-go-example", SecretKey: secret, Offers: []seller.Offer{selected}, Opaque: &opaque}, nil
 		}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
-			fmt.Fprintln(w, `{"ok":true,"message":"Paid resource accessed"}`)
+			if path == "GET /api/widgets" && r.URL.Query().Get("bundle") == "large" {
+				fmt.Fprintln(w, `{"widgets":[1,2,3,4,5,6]}`)
+			} else {
+				fmt.Fprintln(w, `{"widgets":[1,2,3]}`)
+			}
 		}))
-		if err != nil {
-			return nil, err
-		}
 		mux.Handle(path, protected)
 	}
 	// Routes mounted without Protect remain free.

@@ -26,6 +26,7 @@ before it starts; choose authorization when a failed handler should not be charg
 | Route | Result |
 | --- | --- |
 | `GET /api/widgets` | 0.01 USDC through configured balance or exact offers |
+| `GET /api/widgets?bundle=large` | 0.02 USDC for twice as many widgets |
 | `GET /free` | Free response |
 
 The example loads configuration, builds offers and scheme registrations, and initializes the
@@ -37,6 +38,7 @@ Inspect without paying:
 
 ```sh
 curl -i http://127.0.0.1:3001/api/widgets
+curl -i 'http://127.0.0.1:3001/api/widgets?bundle=large'
 ```
 
 The server prints a timestamped `x402 seller listening on http://127.0.0.1:3001` message.
@@ -61,7 +63,10 @@ do not create another purchase because the application returned an error.
 Only the configured route is payment-protected. `/free` is deliberately unprotected; unknown
 routes return 404. Add application authentication outside this middleware when needed.
 
-This example uses fixed prices. [Metered payments](../../README.md#metered-payments) need the
+`ProtectRequest` resolves a complete route for each request using the bundle selector, without
+reading the request body. Each request gets an isolated resource server, sharing the facilitator
+client and its capability cache. Payment processing uses upstream middleware.
+[Metered payments](../../README.md#metered-payments) need the
 explicit upstream metered implementation. `Route` builds offers from Seller configuration and
 can advertise [sponsorship](../../README.md#sponsorship-and-facilitator-access) when its selected
 Permit2 offers and facilitator capabilities support it. The paired buyer example uses managed

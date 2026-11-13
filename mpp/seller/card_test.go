@@ -189,6 +189,10 @@ func TestCardProtectedRoute(t *testing.T) {
 					t.Fatalf("calls %d want %d", calls, want)
 				}
 				status := 402
+				switch mode {
+				case "payload", "validation", "problem-low", "problem-high", "problem-string", "receipt":
+					status = 502
+				}
 				if mode == "pending" {
 					status = 503
 				}
