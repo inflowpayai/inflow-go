@@ -14,6 +14,7 @@ import (
 	"github.com/inflowpayai/inflow-go/x402"
 	x402buyer "github.com/inflowpayai/inflow-go/x402/buyer"
 	x402seller "github.com/inflowpayai/inflow-go/x402/seller"
+	mppclient "github.com/tempoxyz/mpp-go/pkg/client"
 	foundation "github.com/x402-foundation/x402/go/v2"
 	xhttp "github.com/x402-foundation/x402/go/v2/http"
 	"github.com/x402-foundation/x402/go/v2/http/nethttp"
@@ -60,6 +61,13 @@ func main() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
+	method, err := client.Method(mpp.MethodInflow, mpp.IntentCharge, buyer.PaymentOptions{})
+	if err != nil || method.Name() != mpp.MethodInflow {
+		panic("upstream buyer method contract failed")
+	}
+	if _, ok := method.(mppclient.ChallengeMatcher); !ok {
+		panic("upstream challenge selection missing")
+	}
 	if _, err := tap.New(tap.Options{}).Verify(ctx, tap.Request{}); !errors.Is(err, context.Canceled) {
 		panic("TAP cancellation contract failed")
 	}
@@ -86,6 +94,9 @@ func main() {
 	}
 	if err := sellerClient.Load(ctx); !errors.Is(err, context.Canceled) {
 		panic("seller cancellation contract failed")
+	}
+	if _, err := sellerClient.Method(ctx, seller.Offer{Charge: &mpp.ChargeRequest{Amount: "1", Currency: "USDC"}}); !errors.Is(err, context.Canceled) {
+		panic("upstream seller method cancellation contract failed")
 	}
 	if _, err := sellerClient.Prepare(ctx, seller.Offer{Stripe: &seller.StripeOffer{Amount: "1.25"}}); !errors.Is(err, context.Canceled) {
 		panic("Stripe seller cancellation contract failed")

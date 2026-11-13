@@ -230,6 +230,75 @@ func TestHTTPChallengeSelection(t *testing.T) {
 	}
 }
 
+func TestHTTPUnsupportedHeaderAlternatives(t *testing.T) {
+	header := challengeHeader(t, challenge())
+	unsupported := header + `, header="Payment-Authorization"`
+	for _, test := range []struct {
+		name      string
+		headers   []string
+		paid      bool
+		malformed bool
+	}{
+		{"repeated-first", []string{unsupported, header}, true, false},
+		{"repeated-last", []string{header, unsupported}, true, false},
+		{"combined-first", []string{unsupported + ", " + header}, true, false},
+		{"combined-last", []string{header + ", " + unsupported}, true, false},
+		{"unsupported-only", []string{unsupported}, false, false},
+		{"malformed-unsupported", []string{`Payment id="x", header="Payment-Authorization"`, header}, false, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var payments, requests atomic.Int32
+			platform := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				payments.Add(1)
+				fmt.Fprintf(w, `{"state":"ready","credential":%q}`, credential(t))
+			}))
+			defer platform.Close()
+			resource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.Header.Get("Payment-Authorization") != "" {
+					t.Error("unsupported header sent")
+				}
+				if r.Header.Get("Authorization") != "" {
+					if r.Header.Get("Authorization") != "Payment "+credential(t) {
+						t.Error("wrong credential")
+					}
+					w.WriteHeader(204)
+					return
+				}
+				for _, h := range test.headers {
+					w.Header().Add("WWW-Authenticate", h)
+				}
+				w.WriteHeader(402)
+			}))
+			defer resource.Close()
+			request, _ := http.NewRequest("GET", resource.URL, nil)
+			response, err := newClient(t, platform, nil).Do(request, buyer.PaymentOptions{})
+			if test.paid {
+				if err != nil {
+					t.Fatal(err)
+				}
+				response.Body.Close()
+				if response.StatusCode != 204 || payments.Load() != 1 || requests.Load() != 2 {
+					t.Fatal("alternative not paid exactly once")
+				}
+				return
+			}
+			var codec *mpp.CodecError
+			var paymentError *buyer.Error
+			if test.malformed {
+				if !errors.As(err, &codec) {
+					t.Fatalf("expected malformed challenge: %v", err)
+				}
+			} else if !errors.As(err, &paymentError) || paymentError.Code != buyer.Unsupported {
+				t.Fatalf("expected unsupported: %v", err)
+			}
+			if payments.Load() != 0 || requests.Load() != 1 {
+				t.Fatal("unsupported or malformed challenge started payment")
+			}
+		})
+	}
+}
+
 func TestHTTPReplayMustBeReadyBeforePayment(t *testing.T) {
 	for _, mode := range []string{"absent", "fails", "nil"} {
 		t.Run(mode, func(t *testing.T) {

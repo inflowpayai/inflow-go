@@ -1,13 +1,17 @@
 package mpp
 
 import (
+	"errors"
 	"strings"
 
 	foundation "github.com/tempoxyz/mpp-go/pkg/mpp"
 )
 
+var errUnsupportedCredentialHeader = invalid("challenge", "unsupported credential header")
+
 // ParseChallenges accepts repeated or combined WWW-Authenticate header values.
 // Non-Payment authentication schemes are left to the application's auth handler.
+// Payment challenges requiring another credential header are not selectable.
 func ParseChallenges(headers []string) ([]Challenge, error) {
 	result := make([]Challenge, 0)
 	for _, header := range headers {
@@ -23,6 +27,9 @@ func ParseChallenges(headers []string) ([]Challenge, error) {
 				continue
 			}
 			challenge, err := ParseChallenge(part)
+			if errors.Is(err, errUnsupportedCredentialHeader) {
+				continue
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -35,15 +42,15 @@ func ParseChallenges(headers []string) ([]Challenge, error) {
 func ParseChallenge(header string) (Challenge, error) {
 	var result Challenge
 	if len(header) > maxEncodedSize || !safeHeader(header) {
-		return result, invalid("challenge header", "unsafe or oversized header")
+		return Challenge{}, invalid("challenge header", "unsafe or oversized header")
 	}
 	scheme, rest, ok := strings.Cut(strings.TrimSpace(header), " ")
 	if !ok || !strings.EqualFold(scheme, "Payment") {
-		return result, invalid("challenge header", "expected Payment scheme")
+		return Challenge{}, invalid("challenge header", "expected Payment scheme")
 	}
 	fields, err := parseParams(rest)
 	if err != nil {
-		return result, err
+		return Challenge{}, err
 	}
 	result = Challenge{ID: fields["id"], Realm: fields["realm"], Method: fields["method"], Intent: fields["intent"], Request: fields["request"]}
 	for key, target := range map[string]**string{"expires": &result.Expires, "description": &result.Description, "digest": &result.Digest, "opaque": &result.Opaque} {
@@ -54,11 +61,14 @@ func ParseChallenge(header string) (Challenge, error) {
 	if err := validateChallenge(result); err != nil {
 		return Challenge{}, err
 	}
+	if fields["header"] != "" && !strings.EqualFold(fields["header"], "Authorization") {
+		return Challenge{}, errUnsupportedCredentialHeader
+	}
 	return result, nil
 }
 
 func RenderChallenge(c Challenge) (string, error) {
-	header, err := foundation.FormatAuthenticateStrict(&foundation.Challenge{ID: c.ID, Method: c.Method, Intent: c.Intent, RequestB64: c.Request}, c.Realm)
+	header, err := foundation.FormatChallenge(&foundation.Challenge{ID: c.ID, Realm: c.Realm, Method: c.Method, Intent: c.Intent, RequestB64: c.Request})
 	if err != nil {
 		return "", invalid("challenge header", "unsafe field")
 	}

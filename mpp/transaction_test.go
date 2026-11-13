@@ -20,11 +20,11 @@ func TestReceiptTransactionID(t *testing.T) {
 				t.Fatal(err)
 			}
 			valid := value == `"`+id+`"`
-			if valid && (r.InflowTransactionID == nil || *r.InflowTransactionID != id) || !valid && r.InflowTransactionID != nil {
-				t.Fatalf("unexpected identifier: %v", r.InflowTransactionID)
-			}
 			if _, exists := r.Extensions["inflowTransactionId"]; exists {
 				t.Fatal("correlation field leaked into untyped extensions")
+			}
+			if valid && (r.InflowTransactionID == nil || *r.InflowTransactionID != id) || !valid && r.InflowTransactionID != nil {
+				t.Fatalf("unexpected identifier: %v", r.InflowTransactionID)
 			}
 			wire, err := mpp.EncodeReceipt(r)
 			if err != nil {
@@ -58,6 +58,9 @@ func TestReceiptTransactionIDEncoding(t *testing.T) {
 			t.Fatal("encoding mutated caller's receipt")
 		}
 	}
+}
+
+func TestReceiptFieldPreservation(t *testing.T) {
 	r := receipt()
 	r.InflowTransactionID = ptr("22222222-2222-4222-8222-222222222222")
 	r.Extensions = map[string]json.RawMessage{"inflowTransactionId": json.RawMessage(`"33333333-3333-4333-8333-333333333333"`)}
@@ -66,5 +69,36 @@ func TestReceiptTransactionIDEncoding(t *testing.T) {
 	}
 	if err := json.Unmarshal([]byte(`{"method":"inflow"}`), &r); err != nil || r.InflowTransactionID != nil {
 		t.Fatalf("reused receipt retained identifier: %#v %v", r, err)
+	}
+	for _, field := range []string{`"settlement":"invalid"`, `"timestamp":"invalid"`} {
+		raw := `{"method":"inflow","reference":"r","status":"success","timestamp":"2026-01-01T00:00:00Z",` + field + `}`
+		if _, err := mpp.DecodeReceipt(encoded(raw)); err == nil {
+			t.Fatal("invalid receipt accepted", field)
+		}
+	}
+	r = receipt()
+	r.Settlement = &mpp.Settlement{}
+	if _, err := mpp.EncodeReceipt(r); err == nil {
+		t.Fatal("invalid settlement accepted")
+	}
+	r = receipt()
+	r.Timestamp = "10000-01-01T00:00:00Z"
+	if _, err := mpp.EncodeReceipt(r); err == nil {
+		t.Fatal("invalid RFC3339 year accepted")
+	}
+	r = receipt()
+	r.Timestamp = "2026-01-01T01:02:03.123456789Z"
+	r.ExternalID = ptr("")
+	r.SubscriptionID = ptr("subscription-123")
+	r.ChallengeID = ptr("challenge-123")
+	r.Settlement = &mpp.Settlement{Amount: "1", Currency: "USDC"}
+	r.Extensions = map[string]json.RawMessage{"fundingCurrency": json.RawMessage(`"USDC"`), "extra": json.RawMessage(`{}`)}
+	wire, err := mpp.EncodeReceipt(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := mpp.DecodeReceipt(wire)
+	if err != nil || !reflect.DeepEqual(r, again) {
+		t.Fatalf("receipt fields lost: %#v %v", again, err)
 	}
 }

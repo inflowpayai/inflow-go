@@ -111,12 +111,12 @@ func TestCardProtectedRoute(t *testing.T) {
 				if mode == "receipt" {
 					id = "other"
 				}
-				json.NewEncoder(w).Encode(map[string]any{"receipt": mpp.Receipt{Method: "card", Reference: "test", Status: "success", Timestamp: "2026-10-07T00:00:00Z", ChallengeID: &id}})
+				json.NewEncoder(w).Encode(map[string]any{"receipt": map[string]any{"method": "card", "reference": "test", "status": "success", "timestamp": "2026-10-07T00:00:00Z", "challengeId": &id}})
 			}))
 			defer server.Close()
 			client := clientFor(t, server)
 			offer := seller.CardOffer{Amount: "1.25", BillingRequired: new(false), ExternalID: new("")}
-			route := seller.Route{Realm: "seller.example", SecretKey: "test-only-key", Offers: []seller.Offer{{Card: &offer}}, Opaque: new("one")}
+			route := seller.Route{Realm: "seller.example", SecretKey: "test-only-key", Offers: []seller.Offer{{Card: &offer}}, Opaque: new("eyJyb3V0ZSI6Im9uZSJ9")}
 			if mode == "expired" {
 				route.Lifetime = time.Nanosecond
 			}
@@ -132,7 +132,6 @@ func TestCardProtectedRoute(t *testing.T) {
 				t.Fatal(challenges, err)
 			}
 			credential := mpp.Credential{Challenge: challenges[0], Payload: cardPayload()}
-			// Description is a display field outside the challenge HMAC; it must still be forwarded.
 			credential.Challenge.Description = new("displayed description")
 			if mode == "supplied-source" {
 				credential.Source = new("did:example:buyer")

@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"log"
@@ -73,7 +72,7 @@ func newHandler(ctx context.Context, options inflow.Options, secret, method stri
 	}
 	for path, offer := range offers {
 		// Distinct opaque values prevent a credential for one route being reused on another.
-		opaque := base64.RawURLEncoding.EncodeToString([]byte(path))
+		opaque, _ := mpp.Encode(map[string]string{"route": path}) // Fixed route strings, not caller input.
 		if _, err := client.Prepare(ctx, offer); err != nil {
 			return nil, err
 		}

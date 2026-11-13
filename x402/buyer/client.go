@@ -139,6 +139,9 @@ func decode[T any](data []byte) (T, error) {
 	if err := d.Decode(new(any)); err != io.EOF {
 		return result, &Error{Code: "invalid-response"}
 	}
+	if err := preserveNumbers(data, &result); err != nil {
+		return result, &Error{Code: "invalid-response", Cause: err}
+	}
 	return result, nil
 }
 func snapshot[T any](value T) (T, error) {

@@ -39,7 +39,7 @@ func TestInstrumentReceiptBinding(t *testing.T) {
 					return
 				}
 				broadcasts++
-				json.NewEncoder(w).Encode(map[string]any{"receipt": mpp.Receipt{Method: test.method, Reference: "receipt", Status: "success", Timestamp: "2026-10-07T00:00:00Z", ChallengeID: test.challenge}})
+				json.NewEncoder(w).Encode(map[string]any{"receipt": map[string]any{"method": test.method, "reference": "receipt", "status": "success", "timestamp": "2026-10-07T00:00:00Z", "challengeId": test.challenge}})
 			}))
 			defer s.Close()
 			credential := sampleCredential()
@@ -94,7 +94,7 @@ func TestInstrumentProtectedRoute(t *testing.T) {
 					if matching {
 						id = body.Credential.Challenge.ID
 					}
-					json.NewEncoder(w).Encode(map[string]any{"receipt": mpp.Receipt{Method: "inflow", Reference: "receipt", Status: "success", Timestamp: "2026-10-07T00:00:00Z", ChallengeID: &id}})
+					json.NewEncoder(w).Encode(map[string]any{"receipt": map[string]any{"method": "inflow", "reference": "receipt", "status": "success", "timestamp": "2026-10-07T00:00:00Z", "challengeId": &id}})
 				default:
 					t.Errorf("unexpected path %s", r.URL)
 					w.WriteHeader(500)
