@@ -274,7 +274,7 @@ func TestHTTPPoliciesAndFailures(t *testing.T) {
 				r.Header.Set("Authorization", "Payment "+encoded)
 				w = httptest.NewRecorder()
 				h.ServeHTTP(w, r)
-				if w.Code != 402 || broadcasts.Load() != 0 {
+				if w.Code != 502 || broadcasts.Load() != 0 || w.Header().Get("WWW-Authenticate") != "" {
 					t.Fatal("invalid accepted")
 				}
 			}

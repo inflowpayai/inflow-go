@@ -17,6 +17,7 @@ demonstration key.
 | Route | Result |
 | --- | --- |
 | `GET /api/widgets` | 0.01 USDC charge |
+| `GET /api/widgets?bundle=large` | 0.02 USDC charge for twice as many widgets |
 | `GET /api/subscribe` | Recurring 1.00 USDC monthly subscription, expiring one year after startup |
 | `GET /free` | Free response |
 
@@ -27,6 +28,7 @@ Inspect a challenge without paying:
 
 ```sh
 curl -i http://127.0.0.1:3000/api/widgets
+curl -i 'http://127.0.0.1:3000/api/widgets?bundle=large'
 ```
 
 The server prints a timestamped `MPP seller listening on http://127.0.0.1:3000` message.
@@ -45,11 +47,12 @@ Run the [MPP buyer](../mpp-buyer/README.md)
 with a separate buyer key to complete the exchange. Trying the subscription endpoint is optional;
 its recurring terms are not a one-time charge.
 
-`Protect` verifies challenge binding, validates the credential, and broadcasts payment before
+`ProtectRequest` selects the offer from each request, verifies challenge binding, validates the credential, and broadcasts payment before
 running the handler. A handler failure does not reverse payment. Each route has a distinct signed
-opaque value so its credential cannot be moved to another route.
+opaque value so its credential cannot be moved to another route. Subscription terms stay fixed;
+the bundle selector changes only one-time widget purchases. Request bodies are not read for pricing.
 
-This example has no application authentication. Place application authentication outside `Protect`,
+This example has no application authentication. Place application authentication outside `ProtectRequest`,
 using a separate API-key header or cookie where MPP needs Authorization. See the
 [SDK integration guide](../../README.md#accepting-payments) for instruments, alternative offers,
 Tempo, and separate validation/broadcast calls.
@@ -68,8 +71,9 @@ account in the InFlow dashboard first. Startup fails if the account does not adv
 charge support. The example reads its Stripe profile and allowed payment methods from InFlow;
 do not supply a Stripe secret key to this application.
 
-`GET /api/widgets` advertises a `stripe/charge` challenge containing 125 cents. `/free` stays free;
-there is no subscription route in this mode. An external Stripe-capable Buyer must obtain a Shared
+`GET /api/widgets` advertises a `stripe/charge` challenge containing 125 cents;
+`?bundle=large` selects 250 cents. `/free` stays free, and there is no subscription route in this mode.
+An external Stripe-capable Buyer must obtain a Shared
 Payment Token and submit its Payment credential. The Go MPP Buyer example cannot create that token.
 The Seller forwards it to InFlow for validation and processing before delivering the resource.
 
@@ -87,7 +91,8 @@ go run ./examples/mpp-seller
 
 Keep the Seller API key and signing key from the setup above. The Seller account must advertise
 CARD charge support with merchant settings and a public encryption key. Startup rejects an
-unavailable configuration. `/api/widgets` advertises 125 cents, `/free` stays free, and no subscription
-route is registered. Run the [CARD Buyer](../mpp-buyer/README.md#visa-card) with a separate eligible
+unavailable configuration. `/api/widgets` advertises 125 cents (`?bundle=large` selects 250 cents),
+`/free` stays free, and no subscription route is registered. Run the
+[CARD Buyer](../mpp-buyer/README.md#visa-card) with a separate eligible
 Buyer account. The Seller forwards the encrypted credential to InFlow for validation and processing;
 it does not need a decryption key or direct Visa integration.

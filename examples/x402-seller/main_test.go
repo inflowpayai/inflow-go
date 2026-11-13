@@ -100,7 +100,7 @@ func testRoutes(t *testing.T, flow foundation.PaymentFlowName) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/api/widgets"} {
+	for _, path := range []string{"/api/widgets", "/api/widgets?bundle=large"} {
 		unpaid := httptest.NewRecorder()
 		handler.ServeHTTP(unpaid, httptest.NewRequest("GET", path, nil))
 		if unpaid.Code != 402 {
@@ -116,6 +116,13 @@ func testRoutes(t *testing.T, flow foundation.PaymentFlowName) {
 		}
 		if len(required.Accepts) == 0 {
 			t.Fatal("missing offers")
+		}
+		want := "10000000000000000"
+		if strings.Contains(path, "large") {
+			want = "20000000000000000"
+		}
+		if required.Accepts[0].Amount != want {
+			t.Fatal("wrong price", required.Accepts[0])
 		}
 		if flow == foundation.PaymentFlowUpfront && required.Accepts[0].Extra["paymentFlow"] != "upfront" {
 			t.Fatal("missing upfront declaration")

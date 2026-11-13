@@ -31,6 +31,10 @@ type Route struct {
 // buffer the handler response or undo payment when the handler fails.
 // Paid responses carry an unqualified private Cache-Control directive.
 func (c *Client) Protect(route Route, next http.Handler) (http.Handler, error) {
+	return c.protect(route, next, nil)
+}
+
+func (c *Client) protect(route Route, next http.Handler, digest *string) (http.Handler, error) {
 	if route.Realm == "" || route.SecretKey == "" || len(route.Offers) == 0 || route.Lifetime < 0 || next == nil {
 		return nil, errors.New("MPP route requires realm, secret key, offers, handler, and non-negative lifetime")
 	}
@@ -46,10 +50,10 @@ func (c *Client) Protect(route Route, next http.Handler) (http.Handler, error) {
 		value := *route.Opaque
 		route.Opaque = &value
 	}
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { c.serve(w, r, route, next) }), nil
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { c.serve(w, r, route, next, digest) }), nil
 }
 
-func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next http.Handler) {
+func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next http.Handler, digest *string) {
 	prepared := make([]PreparedOffer, len(route.Offers))
 	for i, offer := range route.Offers {
 		var err error
@@ -62,7 +66,7 @@ func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next
 	credential, err := paymentCredential(r.Header.Values("Authorization"))
 	if err == nil && credential != nil {
 		for _, offer := range prepared {
-			if !matches(route, offer, *credential) {
+			if !reflect.DeepEqual(credential.Challenge.Digest, digest) || !matches(route, offer, *credential) {
 				continue
 			}
 			receipt, err := c.Verify(r.Context(), *credential)
@@ -77,7 +81,9 @@ func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next
 					_, _ = w.Write(failure.Problem)
 					return
 				}
-				break
+				w.Header().Set("Cache-Control", "no-store")
+				http.Error(w, "Payment processing unavailable", http.StatusBadGateway)
+				return
 			}
 			encoded, _ := mpp.EncodeReceipt(receipt)
 			w.Header().Set("Payment-Receipt", encoded)
@@ -102,7 +108,7 @@ func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next
 			}
 		}
 		expires := time.Now().UTC().Add(route.Lifetime).Format(time.RFC3339Nano)
-		challenge := mpp.Challenge{Realm: route.Realm, Method: prepared[i].Method, Intent: prepared[i].Intent, Request: prepared[i].Request, Expires: &expires, Opaque: route.Opaque}
+		challenge := mpp.Challenge{Realm: route.Realm, Method: prepared[i].Method, Intent: prepared[i].Intent, Request: prepared[i].Request, Expires: &expires, Opaque: route.Opaque, Digest: digest}
 		challenge.ID = challengeID(challenge, route.SecretKey)
 		header, err := mpp.RenderChallenge(challenge)
 		if err != nil {

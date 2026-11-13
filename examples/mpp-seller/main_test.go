@@ -121,7 +121,7 @@ func TestRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, path := range []string{"/api/widgets", "/api/subscribe"} {
+	for _, path := range []string{"/api/widgets", "/api/widgets?bundle=large", "/api/subscribe", "/api/subscribe?bundle=large"} {
 		unpaid := httptest.NewRecorder()
 		handler.ServeHTTP(unpaid, httptest.NewRequest("GET", path, nil))
 		if unpaid.Code != 402 {
@@ -130,6 +130,16 @@ func TestRoutes(t *testing.T) {
 		challenges, err := mpp.ParseChallenges(unpaid.Header().Values("WWW-Authenticate"))
 		if err != nil || len(challenges) != 1 {
 			t.Fatal(err)
+		}
+		terms, _ := mpp.Decode(challenges[0].Request)
+		want := "0.01"
+		if strings.Contains(path, "subscribe") {
+			want = "1.00"
+		} else if strings.Contains(path, "large") {
+			want = "0.02"
+		}
+		if terms.(map[string]any)["amount"] != want {
+			t.Fatal("wrong price", terms)
 		}
 		credential, err := mpp.EncodeCredential(mpp.Credential{Challenge: challenges[0], Payload: map[string]any{"transactionId": "test"}})
 		if err != nil {
@@ -214,6 +224,7 @@ func TestStripeRoute(t *testing.T) {
 	if missing.Code != 404 {
 		t.Fatal("Stripe example exposes subscriptions")
 	}
+	assertLargeInstrumentOffer(t, handler, "stripe")
 }
 
 func TestCardRoute(t *testing.T) {
@@ -265,5 +276,20 @@ func TestCardRoute(t *testing.T) {
 	handler.ServeHTTP(missing, httptest.NewRequest("GET", "/api/subscribe", nil))
 	if missing.Code != 404 {
 		t.Fatal("CARD subscription exposed")
+	}
+	assertLargeInstrumentOffer(t, handler, "card")
+}
+
+func assertLargeInstrumentOffer(t *testing.T, handler http.Handler, method string) {
+	t.Helper()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/api/widgets?bundle=large", nil))
+	challenges, err := mpp.ParseChallenges(response.Header().Values("WWW-Authenticate"))
+	if err != nil || len(challenges) != 1 {
+		t.Fatal(challenges, err)
+	}
+	request, err := mpp.Decode(challenges[0].Request)
+	if err != nil || challenges[0].Method != method || request.(map[string]any)["amount"] != "250" {
+		t.Fatal(request, err)
 	}
 }

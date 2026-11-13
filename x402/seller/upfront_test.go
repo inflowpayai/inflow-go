@@ -122,6 +122,11 @@ func TestPaymentFlowConfiguration(t *testing.T) {
 // matching, execution order, receipt handling and retries run through real SDK code.
 func upfrontMiddleware(t *testing.T, scheme, network string, flow foundation.PaymentFlowName, settle http.HandlerFunc, protected http.HandlerFunc) (http.Handler, x402.PaymentPayload) {
 	t.Helper()
+	return upfrontMiddlewareWithPricing(t, false, scheme, network, flow, settle, protected)
+}
+
+func upfrontMiddlewareWithPricing(t *testing.T, dynamic bool, scheme, network string, flow foundation.PaymentFlowName, settle http.HandlerFunc, protected http.HandlerFunc) (http.Handler, x402.PaymentPayload) {
+	t.Helper()
 	config := sampleConfig()
 	if scheme == "instrument" {
 		config.PaymentMethods = append(config.PaymentMethods, x402.PaymentMethodInfo{Scheme: scheme, Network: network, PayTo: "seller", Decimals: 18})
@@ -156,22 +161,34 @@ func upfrontMiddleware(t *testing.T, scheme, network string, flow foundation.Pay
 	if err != nil {
 		t.Fatal(err)
 	}
-	route, err := client.Route(context.Background(), RouteOptions{AcceptsOptions: AcceptsOptions{Price: PriceSpec{Amount: "$1"}, Schemes: []string{scheme}, Networks: []string{network}, PaymentFlow: flow}})
-	if err != nil {
-		t.Fatal(err)
-	}
+	routeOptions := RouteOptions{AcceptsOptions: AcceptsOptions{Price: PriceSpec{Amount: "$1"}, Schemes: []string{scheme}, Networks: []string{network}, PaymentFlow: flow}}
 	registrations, err := client.SchemeRegistrations(context.Background(), RegistrationOptions{Schemes: []string{scheme}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	resource := xhttp.Newx402HTTPResourceServer(xhttp.RoutesConfig{"GET /paid": route}, foundation.WithFacilitatorClient(facilitator))
+	serverOptions := []foundation.ResourceServerOption{foundation.WithFacilitatorClient(facilitator)}
 	for _, registration := range registrations {
-		resource.Register(registration.Network, registration.Server)
+		serverOptions = append(serverOptions, foundation.WithSchemeServer(registration.Network, registration.Server))
 	}
-	if err := resource.Initialize(context.Background()); err != nil {
-		t.Fatal(err)
+	var handler http.Handler
+	if dynamic {
+		handler, err = ProtectRequest(RequestPricingServer{RoutePattern: "GET /paid", Options: serverOptions}, inflow.RequestPricingOptions{}, func(r *http.Request, _ []byte) (xhttp.RouteConfig, error) {
+			return client.Route(r.Context(), routeOptions)
+		}, protected)
+		if err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		route, err := client.Route(context.Background(), routeOptions)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resource := xhttp.Newx402HTTPResourceServer(xhttp.RoutesConfig{"GET /paid": route}, serverOptions...)
+		if err := resource.Initialize(context.Background()); err != nil {
+			t.Fatal(err)
+		}
+		handler = nethttp.PaymentMiddlewareFromHTTPServer(resource, nethttp.WithSyncFacilitatorOnStart(false))(protected)
 	}
-	handler := nethttp.PaymentMiddlewareFromHTTPServer(resource, nethttp.WithSyncFacilitatorOnStart(false))(protected)
 	unpaid := httptest.NewRecorder()
 	handler.ServeHTTP(unpaid, httptest.NewRequest("GET", "http://seller.example/paid", nil))
 	if unpaid.Code != 402 {
@@ -196,6 +213,14 @@ func paidRequest(t *testing.T, payment x402.PaymentPayload) *http.Request {
 }
 
 func TestUpfrontMiddlewareOrderAndFailures(t *testing.T) {
+	testUpfrontMiddlewareOrderAndFailures(t, false)
+}
+
+func TestUpfrontRequestPricingOrderAndFailures(t *testing.T) {
+	testUpfrontMiddlewareOrderAndFailures(t, true)
+}
+
+func testUpfrontMiddlewareOrderAndFailures(t *testing.T, dynamic bool) {
 	for _, tc := range []struct {
 		name, result string
 		status       int
@@ -218,7 +243,7 @@ func TestUpfrontMiddlewareOrderAndFailures(t *testing.T) {
 			events := []string{}
 			var first []byte
 			attempts := 0
-			handler, payment := upfrontMiddleware(t, "balance", "inflow:1", foundation.PaymentFlowUpfront, func(w http.ResponseWriter, r *http.Request) {
+			handler, payment := upfrontMiddlewareWithPricing(t, dynamic, "balance", "inflow:1", foundation.PaymentFlowUpfront, func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				defer mu.Unlock()
 				if r.URL.Path != "/v1/x402/settle" {

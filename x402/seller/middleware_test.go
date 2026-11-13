@@ -19,6 +19,14 @@ import (
 )
 
 func TestActualUpstreamMiddleware(t *testing.T) {
+	testActualUpstreamMiddleware(t, false)
+}
+
+func TestActualUpstreamRequestPricingMiddleware(t *testing.T) {
+	testActualUpstreamMiddleware(t, true)
+}
+
+func testActualUpstreamMiddleware(t *testing.T, dynamic bool) {
 	for _, scenario := range []struct {
 		name, scheme   string
 		verify, settle bool
@@ -109,14 +117,15 @@ func TestActualUpstreamMiddleware(t *testing.T) {
 				t.Fatal(err)
 			}
 			routes := xhttp.RoutesConfig{"GET /paid": {Accepts: offers}}
-			server := xhttp.Newx402HTTPResourceServer(routes, foundation.WithFacilitatorClient(facilitator))
+			serverOptions := []foundation.ResourceServerOption{foundation.WithFacilitatorClient(facilitator)}
 			for _, registration := range registrations {
-				server.Register(registration.Network, registration.Server)
+				serverOptions = append(serverOptions, foundation.WithSchemeServer(registration.Network, registration.Server))
 			}
+			server := xhttp.Newx402HTTPResourceServer(routes, serverOptions...)
 			if err := server.Initialize(context.Background()); err != nil {
 				t.Fatal(err)
 			}
-			handler := nethttp.PaymentMiddlewareFromHTTPServer(server, nethttp.WithSyncFacilitatorOnStart(false))(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				mu.Lock()
 				events = append(events, "handler")
 				mu.Unlock()
@@ -128,7 +137,18 @@ func TestActualUpstreamMiddleware(t *testing.T) {
 				}
 				w.WriteHeader(scenario.handlerStatus)
 				w.Write([]byte("protected-content"))
-			}))
+			})
+			var handler http.Handler = nethttp.PaymentMiddlewareFromHTTPServer(server, nethttp.WithSyncFacilitatorOnStart(false))(next)
+			resolved := 0
+			if dynamic {
+				handler, err = ProtectRequest(RequestPricingServer{Options: serverOptions}, inflow.RequestPricingOptions{}, func(*http.Request, []byte) (xhttp.RouteConfig, error) {
+					resolved++
+					return xhttp.RouteConfig{Accepts: offers}, nil
+				}, next)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			unpaid := httptest.NewRecorder()
 			handler.ServeHTTP(unpaid, httptest.NewRequest("GET", "http://seller.example/paid", nil))
 			if unpaid.Code != 402 || unpaid.Header().Get("Cache-Control") != "no-store" {
@@ -160,6 +180,9 @@ func TestActualUpstreamMiddleware(t *testing.T) {
 			}()
 			if panicked != scenario.panicHandler {
 				t.Fatal("unexpected panic state")
+			}
+			if dynamic && resolved != 2 {
+				t.Fatal("resolver not once per request", resolved)
 			}
 			mu.Lock()
 			defer mu.Unlock()
