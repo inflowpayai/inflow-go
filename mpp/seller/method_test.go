@@ -12,6 +12,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -30,9 +31,11 @@ import (
 // The platform is simulated; challenge issuance, HTTP/MCP transport, lifecycle
 // dispatch, and credential parsing use the released upstream implementation.
 type methodPlatform struct {
-	mu      sync.Mutex
-	calls   []string
-	failure string
+	mu       sync.Mutex
+	calls    []string
+	failure  string
+	issued   *mpp.Credential
+	mismatch string
 }
 
 func (p *methodPlatform) record(call string) {
@@ -43,6 +46,28 @@ func (p *methodPlatform) record(call string) {
 
 func (p *methodPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	p.record(r.URL.Path)
+	if r.URL.Path == "/v1/mpp/validate" || r.URL.Path == "/v1/mpp/broadcast" {
+		p.mu.Lock()
+		issued := p.issued
+		p.mu.Unlock()
+		if issued != nil {
+			expected := *issued
+			// Upstream ChallengeEcho omits description, as documented in the README.
+			// The approval request must still contain it; every other field must survive.
+			expected.Challenge.Description = nil
+			raw, err := io.ReadAll(r.Body)
+			var body struct{ Credential mpp.Credential }
+			if err != nil || json.Unmarshal(raw, &body) != nil || !reflect.DeepEqual(body.Credential, expected) {
+				p.mu.Lock()
+				want, _ := json.Marshal(expected)
+				p.mismatch = fmt.Sprintf("got %s; want %s", raw, want)
+				p.mu.Unlock()
+				http.Error(w, "credential changed in transit", 400)
+				return
+			}
+			r.Body = io.NopCloser(strings.NewReader(string(raw)))
+		}
+	}
 	switch r.URL.Path {
 	case "/v1/mpp/config":
 		fmt.Fprint(w, configJSON)
@@ -57,7 +82,11 @@ func (p *methodPlatform) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		source := "did:key:buyer"
-		encoded, err := mpp.EncodeCredential(mpp.Credential{Challenge: body.Challenge, Payload: map[string]any{"transactionId": "22222222-2222-4222-8222-222222222222"}, Source: &source})
+		credential := mpp.Credential{Challenge: body.Challenge, Payload: map[string]any{"transactionId": "22222222-2222-4222-8222-222222222222"}, Source: &source}
+		p.mu.Lock()
+		p.issued = &credential
+		p.mu.Unlock()
+		encoded, err := mpp.EncodeCredential(credential)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
@@ -113,31 +142,67 @@ func TestUpstreamHTTPMethodLifecycle(t *testing.T) {
 	for _, failure := range []string{"", "validation", "pending", "uncertain", "handler"} {
 		t.Run(failure, func(t *testing.T) {
 			p, _, payment, buyerMethod := methodSetup(t, failure)
-			resource := httptest.NewServer(fs.ChargeMiddleware(payment, fs.ChargeParams{Description: "Paid report"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var requests atomic.Int32
+			protected := fs.ChargeMiddleware(payment, fs.ChargeParams{Description: "Paid report"})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				p.mu.Lock()
+				settled := reflect.DeepEqual(p.calls, []string{"/v1/mpp/config", "/v1/transactions/mpp", "/v1/mpp/validate", "/v1/mpp/broadcast"})
+				p.mu.Unlock()
+				if !settled {
+					t.Error("handler ran before successful settlement")
+				}
 				p.record("handler")
 				if fs.ReceiptFromContext(r.Context()) == nil {
 					t.Error("handler ran without receipt")
 				}
-				if r.Header.Get("X-API-Key") != "" {
-					t.Error("platform key reached resource")
-				}
+				w.Header().Set("X-Application", "retained")
 				if failure == "handler" {
 					http.Error(w, "failed", 500)
 					return
 				}
 				fmt.Fprint(w, "paid")
-			})))
+			}))
+			resource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.Header.Get("X-API-Key") != "" {
+					t.Error("platform key reached resource")
+				}
+				protected.ServeHTTP(w, r)
+			}))
 			defer resource.Close()
 			client, err := fc.NewHTTPClient([]fc.Method{buyerMethod}, fc.WithMaxRetries(1))
 			if err != nil {
 				t.Fatal(err)
 			}
+			client.Timeout = 5 * time.Second
 			res, err := client.Get(resource.URL + "/report")
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer res.Body.Close()
-			io.Copy(io.Discard, res.Body)
+			p.mu.Lock()
+			mismatch := p.mismatch
+			p.mu.Unlock()
+			if mismatch != "" {
+				t.Fatal(mismatch)
+			}
+			body, err := io.ReadAll(res.Body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if requests.Load() != 2 {
+				t.Fatalf("expected one challenge and one paid request, got %d", requests.Load())
+			}
+			if failure == "" || failure == "handler" {
+				wantBody := "paid"
+				if failure == "handler" {
+					wantBody = "failed\n"
+				}
+				if string(body) != wantBody || res.Header.Get("X-Application") != "retained" {
+					t.Fatalf("application response changed: %q %v", body, res.Header)
+				}
+			} else if res.Header.Get("Payment-Receipt") != "" {
+				t.Fatal("failed payment carried a receipt")
+			}
 			want := 200
 			switch failure {
 			case "validation":
