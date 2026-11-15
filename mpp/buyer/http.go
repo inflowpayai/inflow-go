@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	ErrAuthorizationConflict = errors.New("MPP payment requires Authorization; use separate application authentication or handle the request explicitly")
+	ErrAuthorizationConflict = errors.New("MPP payment credential header conflicts with existing request authentication")
 	ErrBodyNotReplayable     = errors.New("MPP payment requires a replayable request body; provide Request.GetBody")
 )
 
@@ -29,26 +29,12 @@ func (c *Client) Do(request *http.Request, options PaymentOptions) (*http.Respon
 	}
 	// Closing without draining avoids waiting for an unbounded challenge body.
 	response.Body.Close()
-	// MPP needs Authorization for its payment credential. Replacing an application's
-	// existing authentication, as the upstream transport does, would remove credentials
-	// the service may require to identify or authorize the caller.
-	if request.URL.User != nil {
-		return nil, ErrAuthorizationConflict
-	}
-	for name, values := range request.Header {
-		if strings.EqualFold(name, "Authorization") {
-			for _, value := range values {
-				if strings.TrimSpace(value) != "" {
-					return nil, ErrAuthorizationConflict
-				}
-			}
-		}
-	}
 	challenges, err := mpp.ParseChallenges(response.Header.Values("WWW-Authenticate"))
 	if err != nil {
 		return nil, err
 	}
 	var selected *mpp.Challenge
+	conflict := false
 	for _, challenge := range challenges {
 		if challenge.Method == mpp.MethodCard {
 			// Match Node's CARD canHandleChallenge predicate before selecting an offer.
@@ -64,10 +50,17 @@ func (c *Client) Do(request *http.Request, options PaymentOptions) (*http.Respon
 		if err != nil {
 			return nil, err
 		}
+		if occupiedCredentialHeader(request, challenge.CredentialHeader()) {
+			conflict = true
+			continue
+		}
 		selected = &challenge
 		break
 	}
 	if selected == nil {
+		if conflict {
+			return nil, ErrAuthorizationConflict
+		}
 		return nil, &Error{Code: Unsupported}
 	}
 	if selected.Expires != nil && *selected.Expires != "" {
@@ -113,14 +106,30 @@ func (c *Client) Do(request *http.Request, options PaymentOptions) (*http.Respon
 		retry.Header = make(http.Header)
 	}
 	for name := range retry.Header {
-		if strings.EqualFold(name, "Authorization") || strings.EqualFold(name, "Payment-Signature") ||
+		if strings.EqualFold(name, selected.CredentialHeader()) || strings.EqualFold(name, "Payment-Signature") ||
 			strings.EqualFold(name, "Payment-Required") || strings.EqualFold(name, "Payment-Response") {
 			delete(retry.Header, name)
 		}
 	}
-	retry.Header.Set("Authorization", "Payment "+encoded)
+	retry.Header.Set(selected.CredentialHeader(), "Payment "+encoded)
 	closeReplay = false
 	return c.resource.Do(singleAttempt(retry))
+}
+
+func occupiedCredentialHeader(request *http.Request, header string) bool {
+	if strings.EqualFold(header, "Authorization") && request.URL.User != nil {
+		return true
+	}
+	for name, values := range request.Header {
+		if strings.EqualFold(name, header) {
+			for _, value := range values {
+				if strings.TrimSpace(value) != "" {
+					return true
+				}
+			}
+		}
+	}
+	return false
 }
 
 func singleAttempt(request *http.Request) *http.Request {

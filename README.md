@@ -43,7 +43,7 @@ The following are intentional InFlow behaviors. The comparison applies to `mpp-g
 
 | Situation | Upstream MPP Go | InFlow Go | What your application needs to do |
 | --- | --- | --- | --- |
-| A paid request already uses `Authorization` | The buyer transport replaces it with the payment credential. | `Do` rejects the conflict before obtaining a credential. | Use a separate API-key header or cookie supported by the service. If the service only accepts application authentication in `Authorization`, its authentication design must accommodate MPP before this client can pay it. Manually sending the request does not resolve that conflict. |
+| A paid request already uses application authentication | The buyer transport writes the payment credential to the challenge's selected field. | `Do` skips offers whose selected credential field is occupied and rejects the request if no compatible offer remains. | A seller can advertise `Payment-Authorization` to keep application authentication in `Authorization`. |
 | A request body cannot be replayed | The transport checks replayability before payment. | `Do` checks replayability before payment. | Supply a working `Request.GetBody` for a request with a body. |
 | A seller checks a payment | Intents can expose separate `Validate` and `Broadcast` operations. | The `Method` adapter implements both; Broadcast revalidates before settlement. Direct `Validate`, `Broadcast`, and `Verify` are also available. | Use Validate for an advisory check, then Broadcast to accept payment. A validation result alone does not permit delivery. |
 | Your service offers subscriptions | The charge convenience helpers select the charge intent. | InFlow supports purchasing a subscription and authorizing access under an existing subscription. | Sellers use `seller.Offer.Subscription`. Buyers pass a subscription challenge to `Fulfil`; supply `PaymentOptions.SubscriptionID` only to use an existing subscription rather than purchase one. See [Accepting payments](#accepting-payments) and [Managed buyer credentials](#managed-buyer-credentials). |
@@ -63,7 +63,7 @@ payments. That client's registered schemes and spending controls remain active.
 | Situation | InFlow behavior | What your application needs to do |
 | --- | --- | --- |
 | Both InFlow and an external wallet can pay | Matching managed requirements take precedence; external signing is the fallback when none match. | Configure `Prefer` for the managed scheme order. Use the upstream client directly for an external-wallet-only flow. |
-| An external wallet is supplied to the combined client | The client still loads InFlow account capabilities. | Supply InFlow authentication; an external wallet does not make this combined client anonymous. |
+| An external wallet is supplied to the combined client | Payment selection loads InFlow account capabilities; successful wallet authentication can avoid payment selection. | Supply InFlow authentication for payment fallback; an external wallet does not make combined payment selection anonymous. |
 | An application after-hook returns an error | Wrapper hooks propagate it on both payment routes. Upstream x402 Go v2.27.0 discards errors from its own after-hooks. | Register application callbacks through `Options.Hooks` when their errors must reach the caller. Hooks registered on `External` retain upstream behavior. |
 | The paid HTTP response is another `402` | `Do` returns it without creating a second payment. It does not run upstream callbacks that update payment state from the seller's response. | Inspect the response before trying another payment. For an external-wallet scheme that requires those callbacks, use the [upstream HTTP client](#application-hooks-and-http-requests) instead of InFlow's `Do`. |
 
@@ -235,6 +235,21 @@ JSON numbers when decoding responses and copying values for hooks and callers. U
 `json.Decoder.UseNumber`; direct decoding through those types can round large numbers. This is
 tracked in [upstream issue #4258](https://github.com/x402-foundation/x402/issues/4258).
 String-encoded payment amounts are unaffected.
+
+The same upstream version's Solana transaction-version parser rejects `json.Number`, including
+valid versions 0 and 1. InFlow converts only those version entries to Go integers before calling
+the external signer; other numeric metadata retains its exact representation.
+[Upstream PR #4270](https://github.com/x402-foundation/x402/pull/4270) addresses both issues.
+When upgrading to a release containing that fix, reassess the two compatibility measures separately:
+
+- Remove the extra number-preserving decoding only after exact-number round-trip tests pass
+  without it, including nested payload, extension and requirement metadata.
+- Remove the Solana version conversion only after the installed parser accepts `json.Number`
+  and the real upstream signer tests pass without the conversion for versions 0 and 1.
+
+Retain the regression tests. A merged upstream PR alone does not establish that the installed
+dependency contains its fix.
+
 These types and declarations do not validate signatures, authorize payments, or execute sponsorship.
 
 ### x402 Buyer
@@ -246,9 +261,18 @@ Concurrent loads share one request; a failed load can be retried.
 
 The combined Buyer client needs an InFlow API key or OAuth access token for that capability lookup:
 use [Sandbox](https://sandbox.inflowpay.ai) for testing or [Production](https://app.inflowpay.ai) for
-live payments. Supplying an external wallet does not bypass this lookup. For external-wallet-only
+live payments. Supplying an external wallet does not bypass payment selection's lookup. For external-wallet-only
 payments without an InFlow account, use the upstream client directly; the opt-in sponsorship
 extension below can also be registered on that client.
+
+For wallet-based access to an already-paid resource, register upstream's
+`signinwithx.CreateClientExtension(signer)` on the client passed as `External`.
+The signer implements upstream `signinwithx.EVMSigner`; it signs authentication messages,
+not payments. `Do` invokes registered authentication hooks only when the seller declares their
+extension, then makes one authentication request. A successful response avoids payment selection
+and approval. If authentication returns another 402, payment selection uses that response's terms
+and the configured payment policies. Redirects are not followed. InFlow-managed wallets do not
+provide this message signer.
 
 ```go
 client, err := buyer.New(buyer.Options{
@@ -390,7 +414,8 @@ and transaction identifiers. Hooks registered directly on the upstream client re
 behavior, including its non-fatal after-hook errors. Callbacks must honor their contexts and support
 concurrent operations. Hook inputs are independent copies of payment data.
 
-`Do(request, options)` sends an unpaid request and at most one paid replay. It preserves application
+`Do(request, options)` sends an unpaid request, at most one wallet-authentication retry, and at most
+one paid replay. It preserves application
 authentication, does not attach InFlow API credentials to the resource request, and never follows
 redirects. A nonempty body must have `Request.GetBody`; replayability is checked before signing.
 The caller closes the returned response body. `Do` returns a second 402 to the caller rather than
@@ -439,6 +464,32 @@ Use `x402/seller` with the upstream x402 `net/http` middleware. InFlow supplies 
 configuration, priced payment offers, scheme registrations and a facilitator client. The
 upstream middleware checks payment, runs your handler and settles a successful response.
 You do not need to implement or host a facilitator.
+
+Upstream extensions remain configurable on the resource server: register the Bazaar extension to
+enrich discovery metadata, or the Sign-In-With-X extension with application-owned storage to let
+previously paid wallets authenticate. Add the corresponding declarations to `RouteConfig.Extensions`.
+For request-priced routes, use `RequestPricingServer.Configure` to register extensions and a paywall
+provider on the server that handles the request. For example:
+
+```go
+Configure: func(server *xhttp.HTTPServer) {
+    server.RegisterExtension(bazaar.BazaarResourceServerExtension)
+    server.RegisterPaywallProvider(xhttp.NewPaywallBuilder().
+        WithNetwork(&xhttp.EVMPaywallHandler{}).
+        WithConfig(&xhttp.PaywallConfig{AppName: "Widget Shop"}).Build())
+},
+```
+
+Here `bazaar` is `github.com/x402-foundation/x402/go/v2/extensions/bazaar`, and `xhttp` is
+`github.com/x402-foundation/x402/go/v2/http`. The paywall is a browser-facing payment page, not an
+additional payment method. Choose handlers for networks your seller actually accepts.
+Builder attribution is opt-in: use the upstream `buildercode` route declaration and register its
+client extension on an external wallet. These declarations do not add managed-wallet attribution.
+
+Exact Solana offers copy `transactionVersions` from the matching network's facilitator capabilities.
+The managed buyer forwards those versions unchanged. An external upstream Solana signer negotiates
+version 0 or 1 from the advertised list; no field means its version-0 default. Configuring an external
+signer does not expand the networks supported by InFlow's managed wallet or facilitator.
 
 Create an InFlow **Seller** account in [Sandbox](https://sandbox.inflowpay.ai) or
 [Production](https://app.inflowpay.ai), then create an API key in that dashboard. Set the
@@ -656,6 +707,11 @@ settle. False verification or settlement results remain false results; unrelated
 remain `inflow.APIError`. Only the recognized Permit2 allowance response is normalized from
 HTTP 412 into a verification result.
 
+The facilitator decodes `EXTENSION-RESPONSES` into upstream's `ExtensionResponses` field for
+seller hooks, including the recognized HTTP 412 response. Missing or malformed metadata is
+ignored without changing verification or settlement results. This metadata is excluded from
+serialized buyer receipts; it is separate from the receipt's ordinary `Extensions` field.
+
 The facilitator preserves a valid payment identifier or derives one from the transaction ID,
 serialized transaction or signature. If none exists, it hashes the compact JSON payment data;
 retain the same payload bytes for verification and settlement in that fallback case. Requests
@@ -808,11 +864,13 @@ if err != nil {
 defer response.Body.Close()
 ```
 
-MPP sends its credential in `Authorization: Payment ...`. If a `402` request already has a
-nonempty `Authorization` header, or URL credentials that produce Basic authentication, `Do`
-returns `ErrAuthorizationConflict` before obtaining a payment credential. Separate API-key and
-cookie headers are preserved. Ordinary non-402 responses, including authenticated ones, pass
-through without a payment attempt. The SDK does not move application credentials to another header.
+MPP sends its credential in the challenge's selected header, defaulting to `Authorization`.
+A seller can advertise `header="Payment-Authorization"` while application authentication stays
+in `Authorization`. `Do` skips offers whose credential field is already occupied; if no supported
+offer avoids the conflict, it returns `ErrAuthorizationConflict` before payment. URL credentials
+also conflict with an offer using `Authorization`. Separate application headers and cookies are
+preserved. Ordinary non-402 responses pass through without a payment attempt. The SDK does not
+move application credentials to another header.
 
 A request with a body must supply a working `GetBody` before payment starts. `http.NewRequest`
 provides it for `strings.Reader`, `bytes.Reader`, and `bytes.Buffer` inputs. The SDK does not buffer
@@ -890,8 +948,9 @@ users. `Protect` preserves your handler's other cache directives and adds `priva
 This does not prohibit browser-local caching; set `Cache-Control: no-store` in your handler when
 responses must not be stored.
 
-Place application authentication outside this handler. MPP uses `Authorization: Payment ...`;
-separate API-key or cookie authentication avoids conflicting with that header. `CanOffer` filters
+Place application authentication outside this handler. Set `Route.Header` to `"Payment-Authorization"`
+when application authentication uses `Authorization`; leaving it empty uses `Authorization` for
+payment. The selected header is signed into each challenge and checked on receipt. `CanOffer` filters
 which configured offers are advertised. It is not access control and does not revoke credentials
 already issued for a matching offer. Optional `Opaque` is an encoded value signed into the
 challenge; use distinct values when otherwise identical offers must not be interchangeable across
@@ -1043,10 +1102,10 @@ InFlow can supply payment methods to upstream HTTP and MCP transports. Its exist
    and opaque values, payload numbers, and source are preserved at the adapter boundary.
    [Upstream types](https://github.com/tempoxyz/mpp-go/blob/v0.9.0/pkg/mpp/challenge.go).
 
-2. **Authentication headers.** The InFlow integration uses `Authorization: Payment ...` and rejects
-   challenges that require `Payment-Authorization`. The alternate header changes signed challenge
-   fields that the InFlow platform contract does not accept. Use separate cookie/API-key authentication
-   for the resource. InFlow's `Do` rejects an existing conflicting Authorization header before payment.
+2. **Authentication headers.** InFlow preserves an advertised credential header through its codecs,
+   platform requests, and upstream adapters. `Do` uses that field without replacing existing
+   application credentials. Configure `Route.Header` for InFlow's seller middleware, or the native
+   header option when using upstream middleware.
 
 3. **Subscription entry points.** Upstream `Charge`, its HTTP middleware, and MCP `Charge` select
    the charge intent. An InFlow subscription method supports upstream's explicit credential lifecycle,
@@ -1091,12 +1150,77 @@ payment, err := mppserver.New(sellerMethod, "shop.example", secretKey)
 if err != nil { return err }
 ```
 
+Pass `mppclient.WithOrderChallenges` to the upstream HTTP client when your application needs to
+filter or reorder payable offers. Its callback receives candidates after method matching, including
+InFlow's configured method limits. Returning no candidates declines payment; returning an error
+stops the request before creating an approval. For example, returning `candidates[1:]` prefers the
+second candidate when at least two are available. Use the ordinary, unpaid `http.Client` for a
+request that must inspect a 402 without authorizing payment.
+
 Here `mppclient` and `mppserver` refer to `github.com/tempoxyz/mpp-go/pkg/client` and
 `github.com/tempoxyz/mpp-go/pkg/server`. `secretKey` is a stable signing secret of at least 32 bytes,
 not the InFlow API key. `Method(ctx, offer)` loads seller configuration and fixes the offer's payment
 terms. Create a method for each priced offer. Pass only transport information such as `Description`,
 `Body`, `Meta`, and `MppxScope` in upstream `ChargeParams`; price, currency, recipient, external-ID,
 and Tempo payment overrides are rejected rather than silently ignored.
+
+For a buyer request that needs a particular instrument, attach payment options to its context:
+
+```go
+ctx := buyer.WithPaymentOptions(request.Context(), buyer.PaymentOptions{
+    InstrumentID: instrumentID,
+})
+response, err := httpClient.Do(request.WithContext(ctx))
+```
+
+`instrumentID` is the selected InFlow instrument's UUID. The same helper accepts `Merchant` for
+CARD requests or `SubscriptionID` for an existing subscription. Without this helper, the method's
+constructor options apply. Supplying options replaces the entire default value; an empty
+`buyer.PaymentOptions{}` clears all defaults. Merchant values are copied when attached, and
+concurrent requests keep independent options. Invalid options fail before payment creation.
+Cancellation and deadlines use the request context. Direct InFlow `Do`, `Prepare`, and `Fulfil`
+calls use their explicit options argument instead of this context value.
+
+### Optional buyer method limits
+
+Attach limits to each payment method when registering it with the upstream client:
+
+```go
+buyerMethod, err := buyerClient.Method(mpp.MethodInflow, mpp.IntentCharge,
+    buyer.PaymentOptions{}, buyer.MethodLimits{
+        MaxAmount: "0.50",
+        Currencies: []string{"USDC"},
+        ExpectedRecipients: []string{sellerID},
+    },
+)
+if err != nil { return err }
+```
+
+`sellerID` is the intended InFlow seller's UUID. This method accepts charges up to 0.50 USDC
+from that seller. The upstream client skips offers outside those limits. The method checks again
+before creating a credential, including when called without the HTTP transport. These are
+per-payment limits, not cumulative budgets or limits on a recurring subscription.
+
+| Method | Amount limits | Other restrictions |
+|--------|---------------|--------------------|
+| InFlow charge | `MaxAmount` in decimal currency units; requires `Currencies` | `Currencies`, `ExpectedRecipients` (seller UUIDs) |
+| CARD charge | `MaxAmount` in USD, or `MaxAtomicAmount` in cents | Amount limits only |
+| Tempo charge | `MaxAtomicAmount` in token base units, or `MaxAmount` with `MaxAmountDecimals`; either requires `Currencies` | Token addresses in `Currencies`, `AllowedChainIDs`, `ExpectedRecipients` including every split recipient |
+
+Amounts are strings and compared exactly without floating-point conversion. For example, Tempo
+`MaxAmount: "0.50"` with six decimals permits 500000 base units. Tempo addresses are compared
+case-insensitively. If both amount caps are supplied, both must pass.
+
+Omitting limits imposes no local cap. An empty amount string leaves that cap unset; `"0"` permits
+only zero. Nil allowlists impose no restriction; non-nil empty lists permit no values. Missing
+currency, recipient or chain information fails a configured restriction. Configuration is copied
+when constructing the method, and request-specific payment options cannot relax it.
+
+Limits belong to the configured method, not the shared InFlow client. Direct `Do`, `Prepare`, and
+`Fulfil` calls bypass that method and its limits. Server policies and approval requirements still
+apply to every path. Method limits are not supported for subscription intents.
+
+### Seller split settlement
 
 Use `mppserver.ChargeMiddleware(payment, params)` for combined validation and settlement. For a
 split workflow, call `payment.ValidateCredential(ctx, credential)` first. It does not consume payment

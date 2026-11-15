@@ -3,6 +3,7 @@ package mpp
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 const (
@@ -26,6 +27,14 @@ type Challenge struct {
 	Description *string `json:"description,omitempty"`
 	Digest      *string `json:"digest,omitempty"`
 	Opaque      *string `json:"opaque,omitempty"`
+	Header      *string `json:"header,omitempty"`
+}
+
+func (c Challenge) CredentialHeader() string {
+	if c.Header == nil || strings.EqualFold(*c.Header, "Authorization") {
+		return "Authorization"
+	}
+	return *c.Header
 }
 
 type Credential struct {

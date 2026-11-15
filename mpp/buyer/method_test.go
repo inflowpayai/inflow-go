@@ -56,7 +56,7 @@ func TestUpstreamBuyerMethod(t *testing.T) {
 			if !matcher.CanHandleChallenge(challenge) {
 				t.Fatal("valid challenge rejected")
 			}
-			for _, invalid := range []*foundation.Challenge{nil, {}, {ID: "id", Method: "tempo", Intent: "charge"}, {ID: "id", Method: "inflow", Intent: "subscription"}, {ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", RequestB64: "e30", Header: "Payment-Authorization"}} {
+			for _, invalid := range []*foundation.Challenge{nil, {}, {ID: "id", Method: "tempo", Intent: "charge"}, {ID: "id", Method: "inflow", Intent: "subscription"}, {ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", RequestB64: "e30", Header: "Invalid Header"}} {
 				if matcher.CanHandleChallenge(invalid) {
 					t.Fatal("invalid challenge matched")
 				}

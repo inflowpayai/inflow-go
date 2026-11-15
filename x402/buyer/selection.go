@@ -183,7 +183,7 @@ func (c *Client) external(ctx context.Context, required x402.PaymentRequired) (E
 	if err != nil {
 		return EncodedPayment{}, err
 	}
-	payload, err := c.options.External.CreatePaymentPayload(ctx, isolated.Accepts[0], isolated.Resource, isolated.Extensions)
+	payload, err := c.options.External.CreatePaymentPayload(ctx, signerRequirements(isolated.Accepts[0]), isolated.Resource, isolated.Extensions)
 	if err != nil {
 		return EncodedPayment{}, err
 	}
