@@ -22,6 +22,17 @@ func sampleCredential() mpp.Credential {
 	return mpp.Credential{Challenge: mpp.Challenge{ID: "test", Method: "inflow", Intent: "charge", Realm: "seller.example", Request: "e30"}, Payload: map[string]any{"transactionId": "test"}}
 }
 
+type observedDoneContext struct {
+	context.Context
+	entered chan struct{}
+	once    sync.Once
+}
+
+func (c *observedDoneContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.entered) })
+	return c.Context.Done()
+}
+
 func TestConfigRecoveryAndConcurrentLoad(t *testing.T) {
 	for _, first := range []string{"{}", "{", "denied"} {
 		t.Run(first, func(t *testing.T) {
@@ -60,6 +71,8 @@ func TestConfigRecoveryAndConcurrentLoad(t *testing.T) {
 		fmt.Fprint(w, configJSON)
 	}))
 	defer server.Close()
+	unblock := sync.OnceFunc(func() { close(release) })
+	defer unblock()
 	c := clientFor(t, server)
 	var wg sync.WaitGroup
 	wg.Go(func() {
@@ -68,24 +81,31 @@ func TestConfigRecoveryAndConcurrentLoad(t *testing.T) {
 		}
 	})
 	<-entered
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	if err := c.Load(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	waiting := &observedDoneContext{Context: ctx, entered: make(chan struct{})}
+	result := make(chan error, 1)
+	go func() { result <- c.Load(waiting) }()
+	<-waiting.entered
+	cancel()
+	if err := <-result; !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 	for range 10 {
+		waiting := &observedDoneContext{Context: context.Background(), entered: make(chan struct{})}
 		wg.Go(func() {
-			if err := c.Load(context.Background()); err != nil {
+			if err := c.Load(waiting); err != nil {
 				t.Error(err)
 			}
 		})
+		<-waiting.entered
 	}
-	close(release)
+	unblock()
 	wg.Wait()
 	if calls.Load() != 1 {
 		t.Fatal(calls.Load())
 	}
-	if err := c.Load(ctx); !errors.Is(err, context.DeadlineExceeded) {
+	if err := c.Load(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatal(err)
 	}
 }
