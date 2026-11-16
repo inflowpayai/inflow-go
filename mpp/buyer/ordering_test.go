@@ -97,3 +97,48 @@ func TestNativeChallengeOrdering(t *testing.T) {
 		})
 	}
 }
+
+func TestNativeTransportSkipsUnsupportedCredentialHeader(t *testing.T) {
+	for _, validAlternative := range []bool{false, true} {
+		var payments atomic.Int32
+		api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			payments.Add(1)
+			json.NewEncoder(w).Encode(map[string]any{"state": "ready", "credential": credential(t)})
+		}))
+		resource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Header.Get("Authorization") != "" {
+				w.WriteHeader(204)
+				return
+			}
+			wire := challenge()
+			header := "X-Payment"
+			wire.Header = &header
+			w.Header().Add("WWW-Authenticate", challengeHeader(t, wire))
+			if validAlternative {
+				w.Header().Add("WWW-Authenticate", challengeHeader(t, challenge()))
+			}
+			w.WriteHeader(402)
+		}))
+		method, err := newClient(t, api, nil).Method("inflow", "charge", buyer.PaymentOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequest("GET", resource.URL, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response, err := fc.New([]fc.Method{method}).Do(request)
+		if response != nil {
+			response.Body.Close()
+		}
+		if validAlternative {
+			if err != nil || response.StatusCode != 204 || payments.Load() != 1 {
+				t.Fatalf("valid alternative: %v, payments %d", err, payments.Load())
+			}
+		} else if !errors.Is(err, fc.ErrNoMethodFound) || payments.Load() != 0 {
+			t.Fatalf("invalid challenge: %v, payments %d", err, payments.Load())
+		}
+		resource.Close()
+		api.Close()
+	}
+}

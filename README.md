@@ -1091,6 +1091,15 @@ card-processing dependency.
 
 ### Upstream compatibility notes
 
+Payment challenges select `Authorization` by omitting `header`, or select
+`Payment-Authorization` explicitly. The managed buyer rejects other explicit values
+before requesting payment. Native mpp-go parsing erases explicit `Authorization`
+and empty values before `Client.Method` receives them, so that native path cannot
+reject those values here. [Upstream issue #323](https://github.com/tempoxyz/mpp-go/issues/323)
+tracks the parser limitation. Use InFlow's challenge parser and direct buyer methods
+when the original header distinction must be checked; custom fields are rejected
+on both buyer paths.
+
 These notes apply to [mpp-go v0.9.0](https://github.com/tempoxyz/mpp-go/tree/v0.9.0).
 InFlow can supply payment methods to upstream HTTP and MCP transports. Its existing `Do`,
 `Fulfil`, `Validate`, `Broadcast`, and `Protect` entry points remain available.

@@ -29,6 +29,28 @@ func challenge() mpp.Challenge {
 	return mpp.Challenge{ID: "test", Realm: "seller.example", Method: "inflow", Intent: "charge", Request: "e30"}
 }
 
+func TestInvalidCredentialHeaderCannotStartPayment(t *testing.T) {
+	calls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client := newClient(t, server, nil)
+	for _, header := range []string{"Authorization", "authorization", "", "X-Payment"} {
+		input := challenge()
+		input.Header = &header
+		_, err := client.Fulfil(context.Background(), input, buyer.PaymentOptions{})
+		var invalid *mpp.CodecError
+		if !errors.As(err, &invalid) {
+			t.Fatalf("expected invalid challenge, got %v", err)
+		}
+	}
+	if calls != 0 {
+		t.Fatalf("invalid headers made %d payment requests", calls)
+	}
+}
+
 func credential(t *testing.T) string {
 	t.Helper()
 	source := "did:inflow:test"
