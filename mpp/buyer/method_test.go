@@ -56,6 +56,16 @@ func TestUpstreamBuyerMethod(t *testing.T) {
 			if !matcher.CanHandleChallenge(challenge) {
 				t.Fatal("valid challenge rejected")
 			}
+			for _, header := range []string{"Authorization", "authorization", "X-Payment"} {
+				invalid := *challenge
+				invalid.Header = header
+				if matcher.CanHandleChallenge(&invalid) {
+					t.Fatal("unsupported header matched")
+				}
+				if _, err := method.CreateCredential(context.Background(), &invalid); err == nil {
+					t.Fatal("unsupported header accepted")
+				}
+			}
 			for _, invalid := range []*foundation.Challenge{nil, {}, {ID: "id", Method: "tempo", Intent: "charge"}, {ID: "id", Method: "inflow", Intent: "subscription"}, {ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", RequestB64: "e30", Header: "Invalid Header"}} {
 				if matcher.CanHandleChallenge(invalid) {
 					t.Fatal("invalid challenge matched")

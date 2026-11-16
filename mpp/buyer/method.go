@@ -3,6 +3,7 @@ package buyer
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/inflowpayai/inflow-go/internal/mppwire"
 	"github.com/inflowpayai/inflow-go/mpp"
@@ -39,6 +40,9 @@ func (m *method) CanHandleChallenge(challenge *foundation.Challenge) bool {
 	if challenge == nil || challenge.Method != m.name || challenge.Intent != m.intent {
 		return false
 	}
+	if challenge.Header != "" && !strings.EqualFold(challenge.Header, "Payment-Authorization") {
+		return false
+	}
 	wire, err := mppwire.FromChallenge(*challenge)
 	if err != nil {
 		return false
@@ -57,6 +61,11 @@ func (m *method) CreateCredential(ctx context.Context, challenge *foundation.Cha
 	}
 	if challenge.Method != m.name || challenge.Intent != m.intent {
 		return nil, &Error{Code: Unsupported}
+	}
+	// mpp-go #323 can erase an invalid explicit default during native parsing.
+	// Check values still present before FromChallenge serializes them again.
+	if challenge.Header != "" && !strings.EqualFold(challenge.Header, "Payment-Authorization") {
+		return nil, &mpp.CodecError{Artifact: "challenge", Reason: "header must be omitted or Payment-Authorization"}
 	}
 	wire, err := mppwire.FromChallenge(*challenge)
 	if err != nil {

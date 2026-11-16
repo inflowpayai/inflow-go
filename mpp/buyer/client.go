@@ -136,6 +136,9 @@ func (c *Client) Prepare(ctx context.Context, challenge mpp.Challenge, options P
 var pendingTimeout = errors.New("MPP pending budget expired")
 
 func validate(challenge mpp.Challenge, options PaymentOptions) error {
+	if challenge.Header != nil && !strings.EqualFold(*challenge.Header, "Payment-Authorization") {
+		return &mpp.CodecError{Artifact: "challenge", Reason: "header must be omitted or Payment-Authorization"}
+	}
 	if _, err := mpp.RenderChallenge(challenge); err != nil {
 		return err
 	}
