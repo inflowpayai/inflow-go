@@ -23,6 +23,8 @@ type Route struct {
 	// Zero selects five minutes. The signing key is separate from the platform API key.
 	Lifetime time.Duration
 	Opaque   *string
+	// Header selects the payment credential field; empty means Authorization.
+	Header string
 	// CanOffer selects advertised offers; it does not revoke issued credentials.
 	CanOffer func(*http.Request, Offer) (bool, error)
 }
@@ -40,6 +42,12 @@ func (c *Client) protect(route Route, next http.Handler, digest *string) (http.H
 	}
 	if route.Lifetime == 0 {
 		route.Lifetime = 5 * time.Minute
+	}
+	if route.Header == "" {
+		route.Header = "Authorization"
+	}
+	if _, err := mpp.RenderChallenge(mpp.Challenge{ID: "id", Realm: "validation", Method: "inflow", Intent: "charge", Request: "e30", Header: &route.Header}); err != nil {
+		return nil, err
 	}
 	// Capture values, not caller-owned request pointers or nested method details.
 	raw, _ := json.Marshal(route.Offers)
@@ -63,7 +71,7 @@ func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next
 			return
 		}
 	}
-	credential, err := paymentCredential(r.Header.Values("Authorization"))
+	credential, err := paymentCredential(r.Header.Values(route.Header))
 	if err == nil && credential != nil {
 		for _, offer := range prepared {
 			if !reflect.DeepEqual(credential.Challenge.Digest, digest) || !matches(route, offer, *credential) {
@@ -109,6 +117,9 @@ func (c *Client) serve(w http.ResponseWriter, r *http.Request, route Route, next
 		}
 		expires := time.Now().UTC().Add(route.Lifetime).Format(time.RFC3339Nano)
 		challenge := mpp.Challenge{Realm: route.Realm, Method: prepared[i].Method, Intent: prepared[i].Intent, Request: prepared[i].Request, Expires: &expires, Opaque: route.Opaque, Digest: digest}
+		if !strings.EqualFold(route.Header, "Authorization") {
+			challenge.Header = &route.Header
+		}
 		challenge.ID = challengeID(challenge, route.SecretKey)
 		header, err := mpp.RenderChallenge(challenge)
 		if err != nil {
@@ -209,6 +220,13 @@ func paymentCredential(headers []string) (*mpp.Credential, error) {
 
 func matches(route Route, offer PreparedOffer, credential mpp.Credential) bool {
 	c := credential.Challenge
+	header := route.Header
+	if header == "" {
+		header = "Authorization"
+	}
+	if !strings.EqualFold(c.CredentialHeader(), header) {
+		return false
+	}
 	if c.Method != offer.Method || c.Intent != offer.Intent || c.Realm != route.Realm || !reflect.DeepEqual(c.Opaque, route.Opaque) || c.Expires == nil {
 		return false
 	}
@@ -237,9 +255,13 @@ func challengeID(c mpp.Challenge, secret string) string {
 		}
 		return *p
 	}
-	// Seven MPP binding slots. Preserve the encoded request and opaque bytes;
-	// upstream map conversion would re-encode them before verification.
-	input := strings.Join([]string{c.Realm, c.Method, c.Intent, c.Request, value(c.Expires), value(c.Digest), value(c.Opaque)}, "|")
+	// Preserve encoded request and opaque bytes. Only an alternate header adds
+	// a binding slot, immediately before opaque, as in upstream MPP.
+	parts := []string{c.Realm, c.Method, c.Intent, c.Request, value(c.Expires), value(c.Digest)}
+	if c.CredentialHeader() != "Authorization" {
+		parts = append(parts, c.CredentialHeader())
+	}
+	input := strings.Join(append(parts, value(c.Opaque)), "|")
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write([]byte(input))
 	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))

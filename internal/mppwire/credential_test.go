@@ -13,7 +13,7 @@ import (
 func TestChallengeBridgePreservesEncodedBindings(t *testing.T) {
 	opaque := base64.RawURLEncoding.EncodeToString([]byte(`{ "route": "/paid" }`))
 	description := "A report, with details"
-	value := mpp.Challenge{ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", Request: "eyJhbW91bnQiOiIxMDAifQ", Opaque: &opaque, Description: &description}
+	value := mpp.Challenge{ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", Request: "eyJhbW91bnQiOiIxMDAifQ", Opaque: &opaque, Description: &description, Header: new("Payment-Authorization")}
 	native, err := ToChallenge(value)
 	if err != nil {
 		t.Fatal(err)
@@ -26,7 +26,7 @@ func TestChallengeBridgePreservesEncodedBindings(t *testing.T) {
 
 func TestCredentialBridgePreservesProofNumbersAndNulls(t *testing.T) {
 	source := "did:key:buyer"
-	value := mpp.Credential{Challenge: mpp.Challenge{ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", Request: "e30"}, Source: &source, Payload: map[string]any{"proof": json.Number("9007199254740993"), "optional": nil}}
+	value := mpp.Credential{Challenge: mpp.Challenge{ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", Request: "e30", Header: new("Payment-Authorization")}, Source: &source, Payload: map[string]any{"proof": json.Number("9007199254740993"), "optional": nil}}
 	native, err := ToCredential(value)
 	if err != nil {
 		t.Fatal(err)
@@ -47,8 +47,8 @@ func TestBridgeRejectsUnsupportedAndInvalidValues(t *testing.T) {
 	if _, err := FromChallenge(foundation.Challenge{}); err == nil {
 		t.Fatal("invalid challenge accepted")
 	}
-	if _, err := FromChallenge(foundation.Challenge{ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", RequestB64: "e30", Header: "Payment-Authorization"}); err == nil {
-		t.Fatal("unsupported challenge header accepted")
+	if _, err := FromChallenge(foundation.Challenge{ID: "id", Realm: "seller.example", Method: "inflow", Intent: "charge", RequestB64: "e30", Header: "Invalid Header"}); err == nil {
+		t.Fatal("invalid challenge header accepted")
 	}
 	if _, err := ToChallenge(mpp.Challenge{}); err == nil {
 		t.Fatal("invalid wire challenge accepted")

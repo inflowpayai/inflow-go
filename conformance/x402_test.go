@@ -163,9 +163,25 @@ func executeX402(ctx context.Context, operation string, raw json.RawMessage) (re
 	}
 	switch operation {
 	case "x402.seller.verify":
-		return facilitator.Verify(ctx, input.Payload, input.Requirements)
+		value, err := facilitator.Verify(ctx, input.Payload, input.Requirements)
+		if err != nil {
+			return nil, err
+		}
+		// Observe the seller-only field explicitly: upstream excludes it from
+		// receipt JSON, but the contract checks what seller hooks receive.
+		return struct {
+			*foundation.VerifyResponse
+			ExtensionResponses map[string]any `json:"extensionResponses,omitempty"`
+		}{value, value.ExtensionResponses}, nil
 	case "x402.seller.settle":
-		return facilitator.Settle(ctx, input.Payload, input.Requirements)
+		value, err := facilitator.Settle(ctx, input.Payload, input.Requirements)
+		if err != nil {
+			return nil, err
+		}
+		return struct {
+			*foundation.SettleResponse
+			ExtensionResponses map[string]any `json:"extensionResponses,omitempty"`
+		}{value, value.ExtensionResponses}, nil
 	case "x402.seller.verify-settle":
 		v, err := facilitator.Verify(ctx, input.Payload, input.Requirements)
 		if err != nil {

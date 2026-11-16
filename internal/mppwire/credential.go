@@ -2,7 +2,6 @@
 package mppwire
 
 import (
-	"errors"
 	"strings"
 
 	"github.com/inflowpayai/inflow-go/mpp"
@@ -13,9 +12,6 @@ type Challenge = mpp.Challenge
 type Credential = mpp.Credential
 
 func FromCredential(value foundation.Credential) (Credential, error) {
-	if value.Challenge.Header != "" && !strings.EqualFold(value.Challenge.Header, "Authorization") {
-		return Credential{}, errors.New("MPP Payment-Authorization challenges are not supported by the platform integration")
-	}
 	header, err := foundation.FormatCredential(&value)
 	if err != nil {
 		return Credential{}, err

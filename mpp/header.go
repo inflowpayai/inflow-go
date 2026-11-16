@@ -1,17 +1,13 @@
 package mpp
 
 import (
-	"errors"
 	"strings"
 
 	foundation "github.com/tempoxyz/mpp-go/pkg/mpp"
 )
 
-var errUnsupportedCredentialHeader = invalid("challenge", "unsupported credential header")
-
 // ParseChallenges accepts repeated or combined WWW-Authenticate header values.
 // Non-Payment authentication schemes are left to the application's auth handler.
-// Payment challenges requiring another credential header are not selectable.
 func ParseChallenges(headers []string) ([]Challenge, error) {
 	result := make([]Challenge, 0)
 	for _, header := range headers {
@@ -27,9 +23,6 @@ func ParseChallenges(headers []string) ([]Challenge, error) {
 				continue
 			}
 			challenge, err := ParseChallenge(part)
-			if errors.Is(err, errUnsupportedCredentialHeader) {
-				continue
-			}
 			if err != nil {
 				return nil, err
 			}
@@ -53,16 +46,13 @@ func ParseChallenge(header string) (Challenge, error) {
 		return Challenge{}, err
 	}
 	result = Challenge{ID: fields["id"], Realm: fields["realm"], Method: fields["method"], Intent: fields["intent"], Request: fields["request"]}
-	for key, target := range map[string]**string{"expires": &result.Expires, "description": &result.Description, "digest": &result.Digest, "opaque": &result.Opaque} {
+	for key, target := range map[string]**string{"expires": &result.Expires, "description": &result.Description, "digest": &result.Digest, "opaque": &result.Opaque, "header": &result.Header} {
 		if value, exists := fields[key]; exists {
 			*target = &value
 		}
 	}
 	if err := validateChallenge(result); err != nil {
 		return Challenge{}, err
-	}
-	if fields["header"] != "" && !strings.EqualFold(fields["header"], "Authorization") {
-		return Challenge{}, errUnsupportedCredentialHeader
 	}
 	return result, nil
 }
@@ -78,7 +68,7 @@ func RenderChallenge(c Challenge) (string, error) {
 	for _, item := range []struct {
 		key   string
 		value *string
-	}{{"expires", c.Expires}, {"description", c.Description}, {"digest", c.Digest}, {"opaque", c.Opaque}} {
+	}{{"expires", c.Expires}, {"description", c.Description}, {"digest", c.Digest}, {"opaque", c.Opaque}, {"header", c.Header}} {
 		if item.value != nil {
 			header += ", " + item.key + `="` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(*item.value) + `"`
 		}
@@ -90,6 +80,16 @@ func RenderChallenge(c Challenge) (string, error) {
 }
 
 func validateChallenge(c Challenge) error {
+	if c.Header != nil {
+		if *c.Header == "" {
+			return invalid("challenge", "credential header must be an HTTP field name")
+		}
+		for i := range *c.Header {
+			if !token((*c.Header)[i]) {
+				return invalid("challenge", "credential header must be an HTTP field name")
+			}
+		}
+	}
 	for _, value := range []string{c.ID, c.Realm, c.Method, c.Intent, c.Request} {
 		if value == "" || !safeHeader(value) {
 			return invalid("challenge", "required fields must be non-empty and header-safe")

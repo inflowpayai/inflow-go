@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -61,7 +62,7 @@ func (f *Facilitator) Verify(ctx context.Context, payload, requirements []byte) 
 			fields, _ := apiError.Body.(map[string]any)
 			if fields["isValid"] == false && fields["invalidReason"] == "permit2_allowance_required" {
 				body, _ := json.Marshal(fields)
-				return decodeResult[foundation.VerifyResponse](&platform.Response{Body: body})
+				return decodeResult[foundation.VerifyResponse](&platform.Response{Body: body, Headers: apiError.Headers})
 			}
 		}
 		return nil, err
@@ -100,7 +101,29 @@ func decodeResult[T any](response *platform.Response) (*T, error) {
 	if err != nil {
 		return nil, err
 	}
+	switch result := any(&value).(type) {
+	case *foundation.VerifyResponse:
+		result.ExtensionResponses = extensionResponses(response)
+	case *foundation.SettleResponse:
+		result.ExtensionResponses = extensionResponses(response)
+	}
 	return &value, nil
+}
+
+func extensionResponses(response *platform.Response) map[string]any {
+	encoded := response.Headers.Get("EXTENSION-RESPONSES")
+	if encoded == "" {
+		return nil
+	}
+	body, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil
+	}
+	value, err := platform.Decode[map[string]any](&platform.Response{Body: body})
+	if err != nil {
+		return nil
+	}
+	return value
 }
 
 func retryDelay(value string) time.Duration {

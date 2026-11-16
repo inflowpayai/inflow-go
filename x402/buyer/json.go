@@ -3,13 +3,42 @@ package buyer
 import (
 	"bytes"
 	"encoding/json"
+	"math/big"
+	"strings"
 
 	"github.com/inflowpayai/inflow-go/x402"
 )
 
+// Upstream SVM version negotiation accepts Go numeric types, not json.Number.
+// Normalize only this enum at the signer boundary; arbitrary proof/metadata
+// numbers retain their exact JSON representation.
+// Upstream issue #4258 is addressed by https://github.com/x402-foundation/x402/pull/4270.
+// Remove this conversion when the installed parser accepts json.Number and the
+// native Solana signer tests pass without it; retain those regression tests.
+func signerRequirements(requirement x402.PaymentRequirements) x402.PaymentRequirements {
+	if !strings.HasPrefix(requirement.Network, "solana:") {
+		return requirement
+	}
+	versions, ok := requirement.Extra["transactionVersions"].([]any)
+	if !ok {
+		return requirement
+	}
+	for i, value := range versions {
+		if number, ok := value.(json.Number); ok {
+			integer, valid := new(big.Rat).SetString(string(number))
+			if valid && integer.IsInt() && integer.Sign() >= 0 && integer.Cmp(big.NewRat(1, 1)) <= 0 {
+				versions[i] = int(integer.Num().Int64())
+			}
+		}
+	}
+	return requirement
+}
+
 // Upstream's custom unmarshallers ignore the outer decoder's UseNumber option:
 // https://github.com/x402-foundation/x402/issues/4258. After upstream validation,
 // decode its arbitrary JSON maps again without rounding numeric proof or metadata values.
+// Reassess separately from signerRequirements when upgrading to the fix in PR #4270;
+// remove only after exact-number round-trip tests pass without this decoding step.
 func preserveNumbers(data []byte, target any) error {
 	switch value := target.(type) {
 	case *x402.PaymentPayload:

@@ -134,7 +134,18 @@ func buildOffers(config x402.ConfigResponse, options AcceptsOptions, transfer st
 				if err != nil {
 					return nil, err
 				}
-				offers = append(offers, chainOffer(wallet, asset, method, amount, timeout, x402.SchemeExact, nil))
+				var extra map[string]any
+				if strings.HasPrefix(asset.Network, "solana:") {
+					for _, kind := range config.Supported {
+						if kind.X402Version == x402.Version && kind.Scheme == x402.SchemeExact && string(kind.Network) == asset.Network {
+							if versions, exists := kind.Extra["transactionVersions"]; exists {
+								extra = map[string]any{"transactionVersions": versions}
+							}
+							break
+						}
+					}
+				}
+				offers = append(offers, chainOffer(wallet, asset, method, amount, timeout, x402.SchemeExact, extra))
 			}
 			if slices.Contains(options.Schemes, x402.SchemeUpto) {
 				if kind := meteredKind(config, asset); kind != nil {

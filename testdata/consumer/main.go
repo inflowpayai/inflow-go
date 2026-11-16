@@ -61,7 +61,9 @@ func main() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	method, err := client.Method(mpp.MethodInflow, mpp.IntentCharge, buyer.PaymentOptions{})
+	method, err := client.Method(mpp.MethodInflow, mpp.IntentCharge, buyer.PaymentOptions{}, buyer.MethodLimits{
+		MaxAmount: "1.00", Currencies: []string{"USDC"},
+	})
 	if err != nil || method.Name() != mpp.MethodInflow {
 		panic("upstream buyer method contract failed")
 	}

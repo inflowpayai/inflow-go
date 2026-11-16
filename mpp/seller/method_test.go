@@ -424,7 +424,7 @@ func TestUpstreamMethodRejectsOverridesAndMismatches(t *testing.T) {
 	}
 	intent := method.Intents()["charge"].(fs.BroadcastingIntent)
 	for _, mutate := range []func(*foundation.Credential){
-		func(c *foundation.Credential) { c.Challenge.Header = "Payment-Authorization" },
+		func(c *foundation.Credential) { c.Challenge.Header = "Invalid Header" },
 		func(c *foundation.Credential) { c.Challenge.Request = "!" },
 		func(c *foundation.Credential) {
 			c.Challenge.Request = base64.RawURLEncoding.EncodeToString([]byte(`{"amount":1e9999}`))

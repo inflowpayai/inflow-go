@@ -230,7 +230,7 @@ func TestHTTPChallengeSelection(t *testing.T) {
 	}
 }
 
-func TestHTTPUnsupportedHeaderAlternatives(t *testing.T) {
+func TestHTTPHeaderAlternatives(t *testing.T) {
 	header := challengeHeader(t, challenge())
 	unsupported := header + `, header="Payment-Authorization"`
 	for _, test := range []struct {
@@ -243,7 +243,7 @@ func TestHTTPUnsupportedHeaderAlternatives(t *testing.T) {
 		{"repeated-last", []string{header, unsupported}, true, false},
 		{"combined-first", []string{unsupported + ", " + header}, true, false},
 		{"combined-last", []string{header + ", " + unsupported}, true, false},
-		{"unsupported-only", []string{unsupported}, false, false},
+		{"alternate-only", []string{unsupported}, true, false},
 		{"malformed-unsupported", []string{`Payment id="x", header="Payment-Authorization"`, header}, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -255,11 +255,12 @@ func TestHTTPUnsupportedHeaderAlternatives(t *testing.T) {
 			defer platform.Close()
 			resource := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
-				if r.Header.Get("Payment-Authorization") != "" {
-					t.Error("unsupported header sent")
+				paymentHeader := "Authorization"
+				if test.name == "repeated-first" || test.name == "combined-first" || test.name == "alternate-only" {
+					paymentHeader = "Payment-Authorization"
 				}
-				if r.Header.Get("Authorization") != "" {
-					if r.Header.Get("Authorization") != "Payment "+credential(t) {
+				if r.Header.Get(paymentHeader) != "" {
+					if r.Header.Get(paymentHeader) != "Payment "+credential(t) {
 						t.Error("wrong credential")
 					}
 					w.WriteHeader(204)

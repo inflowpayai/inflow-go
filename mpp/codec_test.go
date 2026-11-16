@@ -24,27 +24,67 @@ func receipt() mpp.Receipt {
 	return mpp.Receipt{Method: "inflow", Reference: "reference", Status: "success", Timestamp: "2026-09-01T12:00:00Z"}
 }
 
-func TestUnsupportedHeaderSelection(t *testing.T) {
+func TestAlternateHeaderSelection(t *testing.T) {
 	header, err := mpp.RenderChallenge(challenge())
 	if err != nil {
 		t.Fatal(err)
 	}
-	unsupported := header + `, header="Payment-Authorization"`
-	if _, err := mpp.ParseChallenge(unsupported); err == nil {
-		t.Fatal("single unsupported challenge accepted")
+	alternate := header + `, header="Payment-Authorization"`
+	if got, err := mpp.ParseChallenge(alternate); err != nil || got.CredentialHeader() != "Payment-Authorization" {
+		t.Fatalf("alternate header lost: %#v %v", got, err)
 	}
-	for _, headers := range [][]string{{unsupported, header}, {header, unsupported}, {unsupported + ", " + header}} {
+	for _, headers := range [][]string{{alternate, header}, {header, alternate}, {alternate + ", " + header}} {
 		got, err := mpp.ParseChallenges(headers)
-		if err != nil || len(got) != 1 || !reflect.DeepEqual(got[0], challenge()) {
+		if err != nil || len(got) != 2 {
 			t.Fatalf("selection: %#v %v", got, err)
 		}
 	}
-	got, err := mpp.ParseChallenges([]string{unsupported})
-	if err != nil || len(got) != 0 {
-		t.Fatalf("unsupported selection: %#v %v", got, err)
+	got, err := mpp.ParseChallenges([]string{alternate})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("alternate selection: %#v %v", got, err)
 	}
 	if _, err := mpp.ParseChallenges([]string{`Payment id="x", header="Payment-Authorization"`, header}); err == nil {
 		t.Fatal("malformed challenge skipped")
+	}
+}
+
+func TestCredentialHeaderValidation(t *testing.T) {
+	for _, name := range []string{"Authorization", "authorization", "Payment-Authorization", "X-Payment"} {
+		value := challenge()
+		value.Header = &name
+		want := name
+		if strings.EqualFold(name, "Authorization") {
+			want = "Authorization"
+		}
+		if value.CredentialHeader() != want {
+			t.Fatal("incorrect credential field")
+		}
+		header, err := mpp.RenderChallenge(value)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parsed, err := mpp.ParseChallenge(header)
+		if err != nil || !reflect.DeepEqual(parsed, value) {
+			t.Fatalf("header round trip: %#v %v", parsed, err)
+		}
+		encoded, err := mpp.EncodeCredential(mpp.Credential{Challenge: value, Payload: map[string]any{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		credential, err := mpp.DecodeCredential(encoded)
+		if err != nil || !reflect.DeepEqual(credential.Challenge, value) {
+			t.Fatalf("credential round trip: %#v %v", credential, err)
+		}
+	}
+	for _, name := range []string{"", "Invalid Header", "X:Payment", "X\r\nInjection", "é"} {
+		value := challenge()
+		value.Header = &name
+		if _, err := mpp.RenderChallenge(value); err == nil {
+			t.Fatalf("accepted invalid header %q", name)
+		}
+		if _, err := mpp.EncodeCredential(mpp.Credential{Challenge: value, Payload: map[string]any{}}); err == nil {
+			t.Fatalf("encoded invalid header %q", name)
+		}
 	}
 }
 
