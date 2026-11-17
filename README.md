@@ -483,8 +483,27 @@ Configure: func(server *xhttp.HTTPServer) {
 Here `bazaar` is `github.com/x402-foundation/x402/go/v2/extensions/bazaar`, and `xhttp` is
 `github.com/x402-foundation/x402/go/v2/http`. The paywall is a browser-facing payment page, not an
 additional payment method. Choose handlers for networks your seller actually accepts.
-Builder attribution is opt-in: use the upstream `buildercode` route declaration and register its
-client extension on an external wallet. These declarations do not add managed-wallet attribution.
+Builder attribution is opt-in. Sellers use the upstream `buildercode` route declaration.
+Managed buyers configure the native extension in buyer options:
+
+```go
+client, err := buyer.New(buyer.Options{
+    Options: inflow.Options{APIKey: os.Getenv("INFLOW_API_KEY")},
+    BuilderCode: buildercode.NewBuilderCodeClientExtension("my_service"),
+})
+```
+
+Here `buildercode` is `github.com/x402-foundation/x402/go/v2/extensions/buildercode`.
+Its constructor accepts up to five service codes containing lowercase letters, digits, or underscores,
+each 1–32 characters. Invalid codes panic, so validate user-provided configuration before calling it.
+Configure attribution on an external-wallet client with its own `RegisterExtension` method.
+
+Managed payments merge the seller's application code and service codes with the buyer's service
+codes before creating approval. Both `Sign` and `Prepare` send that metadata to the payment service;
+the returned signed payload is not enriched or re-encoded locally. A payment service that persists
+the submitted extensions is required to retain attribution across later retrievals. Older services
+that ignore the extensions can still process payments, but do not retain attribution. With no buyer
+extension, seller attribution is still forwarded; the SDK never inserts an InFlow buyer code itself.
 
 Exact Solana offers copy `transactionVersions` from the matching network's facilitator capabilities.
 The managed buyer forwards those versions unchanged. An external upstream Solana signer negotiates

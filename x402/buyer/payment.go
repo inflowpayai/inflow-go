@@ -76,6 +76,10 @@ func (c *Client) prepare(ctx context.Context, required x402.PaymentRequired, opt
 			return nil, err
 		}
 	}
+	extensions, err := c.managedExtensions(ctx, required)
+	if err != nil {
+		return nil, err
+	}
 	body := options.TransactionRequestExtensions
 	if body == nil {
 		body = make(map[string]any)
@@ -83,6 +87,9 @@ func (c *Client) prepare(ctx context.Context, required x402.PaymentRequired, opt
 	body["accept"] = required.Accepts[0]
 	body["resource"] = required.Resource
 	body["x402Version"] = 2
+	if len(extensions) > 0 {
+		body["extensions"] = extensions
+	}
 	if required.Accepts[0].Scheme == x402.SchemeInstrument && c.options.InstrumentID != "" {
 		body["instrumentId"] = c.options.InstrumentID
 	}

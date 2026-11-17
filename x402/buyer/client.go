@@ -15,6 +15,7 @@ import (
 	inflow "github.com/inflowpayai/inflow-go"
 	"github.com/inflowpayai/inflow-go/internal/platform"
 	"github.com/inflowpayai/inflow-go/x402"
+	"github.com/x402-foundation/x402/go/v2/extensions/buildercode"
 )
 
 // ExternalClient is implemented by the upstream x402 client. Its spending controls remain enabled.
@@ -45,6 +46,9 @@ type Options struct {
 	WaitTimeout time.Duration
 	Prefer      []string
 	External    ExternalClient
+	// BuilderCode adds opt-in attribution to managed payments before approval.
+	// Configure external-wallet attribution on External separately.
+	BuilderCode *buildercode.BuilderCodeClientExtension
 	// Configure hooks and policies before construction. Callbacks must support concurrent operations.
 	Hooks    []Hooks
 	Policies []Policy
