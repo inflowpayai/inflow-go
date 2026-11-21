@@ -5,7 +5,7 @@ go 1.26.10
 require (
 	github.com/ethereum/go-ethereum v1.17.10
 	github.com/felixge/httpsnoop v1.1.0
-	github.com/gagliardetto/solana-go v1.23.0
+	github.com/gagliardetto/solana-go v1.26.0
 	github.com/holiman/uint256 v1.3.2
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/tempoxyz/mpp-go v0.9.0
@@ -70,7 +70,7 @@ require (
 	go.uber.org/zap v1.27.0 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/oauth2 v0.35.0 // indirect
+	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect
 	golang.org/x/term v0.47.0 // indirect
