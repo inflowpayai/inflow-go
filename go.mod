@@ -1,6 +1,6 @@
 module github.com/inflowpayai/inflow-go
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/ethereum/go-ethereum v1.17.10
@@ -8,7 +8,7 @@ require (
 	github.com/gagliardetto/solana-go v1.23.0
 	github.com/holiman/uint256 v1.3.2
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	github.com/tempoxyz/mpp-go v0.9.0
+	github.com/tempoxyz/mpp-go v0.9.1
 	github.com/x402-foundation/x402/go/v2 v2.31.0
 )
 
@@ -42,7 +42,7 @@ require (
 	github.com/klauspost/compress v1.20.3 // indirect
 	github.com/logrusorgru/aurora v2.0.3+incompatible // indirect
 	github.com/mattn/go-colorable v0.1.15 // indirect
-	github.com/mattn/go-isatty v0.0.22 // indirect
+	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/mitchellh/go-testing-interface v1.14.1 // indirect
 	github.com/mostynb/zstdpool-freelist v0.0.0-20201229113212-927304c0c3b1 // indirect
 	github.com/mr-tron/base58 v1.2.0 // indirect
